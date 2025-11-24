@@ -1,0 +1,258 @@
+name: Inference Load Images
+description: Universal test image loader - works with ANY data source for inference.
+inputs:
+  - {name: test_source, type: String, description: 'Any source: huggingface, cdn, or reuse_training'}
+  - {name: source_config, type: String, default: "{}", description: 'JSON config for the source'}
+  - {name: num_samples, type: Integer, default: "50", description: 'Number of test samples'}
+  - {name: test_type, type: String, default: "holdout", description: 'holdout, separate, or custom'}
+outputs:
+  - {name: test_images, type: Dataset}
+  - {name: test_metadata, type: DatasetInfo}
+  - {name: schema_json, type: Data}
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v29
+    command:
+      - bash
+      - -eux
+      - -c
+      - |-
+        set -o pipefail
+        cat >/tmp/load_generic_test.py <<'PY'
+        import argparse, json, os, sys, pickle, base64, io, zipfile, random
+        from urllib.parse import unquote
+        import requests
+        from datasets import load_dataset
+        from PIL import Image
+        import numpy as np
+
+        def main():
+            ap = argparse.ArgumentParser()
+            ap.add_argument("--test-source", required=True)
+            ap.add_argument("--source-config", required=True)
+            ap.add_argument("--num-samples", type=int, required=True)
+            ap.add_argument("--test-type", required=True)
+            ap.add_argument("--test-images", required=True)
+            ap.add_argument("--test-metadata", required=True)
+            ap.add_argument("--schema-output", required=True)
+            args = ap.parse_args()
+
+            config = json.loads(args.source_config) if args.source_config else {}
+            
+            print(f"[INFO] Loading test images from: {args.test_source}")
+            print(f"[INFO] Test type: {args.test_type}")
+            print(f"[INFO] Samples: {args.num_samples}")
+
+            # Route to appropriate loader
+            if args.test_source.startswith('huggingface://'):
+                test_data, metadata = load_hf_test(args.test_source, config, args.num_samples, args.test_type)
+            elif args.test_source.startswith('cdn://'):
+                test_data, metadata = load_cdn_test(args.test_source, config, args.num_samples, args.test_type)
+            elif args.test_source == "reuse_training":
+                test_data, metadata = load_from_training_data(config, args.num_samples)
+            else:
+                # Auto-detect
+                test_data, metadata = auto_detect_test(args.test_source, config, args.num_samples, args.test_type)
+
+            # Save outputs
+            os.makedirs(os.path.dirname(args.test_images) or ".", exist_ok=True)
+            with open(args.test_images, 'wb') as f:
+                pickle.dump(test_data, f)
+
+            os.makedirs(os.path.dirname(args.test_metadata) or ".", exist_ok=True)
+            with open(args.test_metadata, 'wb') as f:
+                pickle.dump(metadata, f)
+
+            schema = {
+                "test_source": args.test_source,
+                "test_type": args.test_type,
+                "test_samples_loaded": len(test_data),
+                "has_ground_truth": metadata.get('has_ground_truth', False)
+            }
+            with open(args.schema_output, 'w') as f:
+                json.dump(schema, f, indent=2)
+
+            print(f"[SUCCESS] Loaded {len(test_data)} test images")
+
+        def load_cdn_test(source, config, num_samples, test_type):
+      
+            cdn_url = source.replace('cdn://', '')
+            caption_strategy = config.get('caption_strategy', 'folder_based')
+            
+            print(f"   Loading CDN test images: {cdn_url}")
+            
+            # Download ZIP
+            decoded_url = unquote(cdn_url)
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(decoded_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            zip_content = io.BytesIO(response.content)
+            test_data = []
+            
+            with zipfile.ZipFile(zip_content, 'r') as zip_file:
+                image_files = [f for f in zip_file.namelist() 
+                             if any(f.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'])]
+                
+                # For testing, we might want a random subset
+                if test_type == "holdout":
+                    # Use a percentage for testing
+                    test_count = min(num_samples, int(len(image_files) * 0.2))
+                    test_files = random.sample(image_files, test_count)
+                else:
+                    test_files = image_files[:num_samples]
+                
+                for i, file_path in enumerate(test_files):
+                    try:
+                        with zip_file.open(file_path) as image_file:
+                            image_data = image_file.read()
+                            base64_image = base64.b64encode(image_data).decode('utf-8')
+                            
+                            # Generate ground truth caption
+                            ground_truth = generate_ground_truth_caption(file_path, caption_strategy)
+                            
+                            test_data.append({
+                                'image_data': base64_image,
+                                'ground_truth_caption': ground_truth,
+                                'sample_id': i,
+                                'filename': file_path,
+                                'image_size': get_image_size_from_bytes(image_data),
+                                'has_ground_truth': True,
+                                'caption_strategy': caption_strategy
+                            })
+                    except Exception as e:
+                        print(f"   [WARN] Skipping {file_path}: {e}")
+                        continue
+
+            metadata = {
+                'source_type': 'cdn_zip',
+                'cdn_url': cdn_url,
+                'total_test_samples': len(test_data),
+                'has_ground_truth': True,
+                'caption_strategy': caption_strategy,
+                'test_type': test_type
+            }
+            
+            return test_data, metadata
+
+        def load_hf_test(source, config, num_samples, test_type):
+       
+            dataset_name = source.replace('huggingface://', '')
+            split = config.get('split', 'validation')
+            if split == 'auto':
+                split = 'test' if 'test' in load_dataset(dataset_name).keys() else 'validation'
+            
+            print(f"   Loading HF test split: {split} from {dataset_name}")
+            
+            dataset = load_dataset(dataset_name, split=split)
+            test_data = []
+            
+            for i in range(min(num_samples, len(dataset))):
+                try:
+                    item = dataset[i]
+                    image = item['image']
+                    ground_truth = item.get('text', item.get('caption', ''))
+                    
+                    base64_image = image_to_base64(image)
+                    
+                    test_data.append({
+                        'image_data': base64_image,
+                        'ground_truth_caption': ground_truth,
+                        'sample_id': i,
+                        'image_size': get_image_size(image),
+                        'has_ground_truth': bool(ground_truth),
+                        'split': split
+                    })
+                except Exception as e:
+                    print(f"   [WARN] Skipping test sample {i}: {e}")
+                    continue
+
+            metadata = {
+                'source_type': 'huggingface',
+                'dataset_name': dataset_name,
+                'split': split,
+                'total_test_samples': len(test_data),
+                'has_ground_truth': any(item['has_ground_truth'] for item in test_data)
+            }
+            
+            return test_data, metadata
+
+        def load_from_training_data(config, num_samples):
+            dataset_source = config.get('dataset_source')
+            # This would reuse your training data but take a holdout set
+            # Implementation depends on where training data is stored
+            test_data = []
+            metadata = {
+                'source_type': 'holdout_from_training',
+                'total_test_samples': len(test_data),
+                'has_ground_truth': True
+            }
+            return test_data, metadata
+
+        def auto_detect_test(source, config, num_samples, test_type):
+         
+            if source.startswith('http') and source.endswith('.zip'):
+                return load_cdn_test(f'cdn://{source}', config, num_samples, test_type)
+            elif '/' in source and not source.startswith('http'):
+                return load_hf_test(f'huggingface://{source}', config, num_samples, test_type)
+            else:
+                raise ValueError(f"Could not auto-detect test source: {source}")
+
+        def generate_ground_truth_caption(file_path, strategy):
+        
+            filename = os.path.splitext(os.path.basename(file_path))[0]
+            path_parts = file_path.split('/')
+            
+            if strategy == "folder_based" and len(path_parts) > 1:
+                class_name = path_parts[-2]  # e.g., "inputfield" or "toggle"
+                return f"A {class_name} component in user interface"
+            elif strategy == "filename_based":
+                return f"An image showing {filename.replace('_', ' ')}"
+            else:
+                return f"UI component: {filename.replace('_', ' ')}"
+
+        def image_to_base64(image):
+            if isinstance(image, Image.Image):
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format='PNG')
+                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+            else:
+                pil_image = Image.fromarray(np.array(image))
+                img_buffer = io.BytesIO()
+                pil_image.save(img_buffer, format='PNG')
+                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+
+        def get_image_size(image):
+            if hasattr(image, 'size'):
+                return image.size
+            elif hasattr(image, 'shape'):
+                return (image.shape[1], image.shape[0])
+            else:
+                return 'unknown'
+
+        def get_image_size_from_bytes(image_data):
+            try:
+                image = Image.open(io.BytesIO(image_data))
+                return image.size
+            except:
+                return 'unknown'
+
+        if __name__ == "__main__":
+            main()
+        PY
+        python3 -u /tmp/load_generic_test.py "$@"
+    args:
+      - --test-source
+      - {inputValue: test_source}
+      - --source-config
+      - {inputValue: source_config}
+      - --num-samples
+      - {inputValue: num_samples}
+      - --test-type
+      - {inputValue: test_type}
+      - --test-images
+      - {outputPath: test_images}
+      - --test-metadata
+      - {outputPath: test_metadata}
+      - --schema-output
+      - {outputPath: schema_json}
