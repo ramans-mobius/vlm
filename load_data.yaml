@@ -1,4 +1,4 @@
-name: Load Data
+name: 2 Load Data 
 description: Universal data loader for image captioning - supports Hugging Face, CDN ZIP, and custom datasets.
 inputs:
   - {name: data_source, type: String, description: 'Dataset source: huggingface://dataset-name, cdn://url, or custom://type'}
@@ -23,14 +23,19 @@ implementation:
         import numpy as np
         import requests
 
-        # Get arguments from command line
-        data_source = sys.argv[1]
-        data_config = sys.argv[2]
-        max_samples = int(sys.argv[3])
-        caption_strategy = sys.argv[4]
-        caption_dataset_path = sys.argv[5]
-        dataset_metadata_path = sys.argv[6]
-        schema_output_path = sys.argv[7]
+        # DEBUG: Print all arguments to see what's being passed
+        print('DEBUG: Number of arguments:', len(sys.argv))
+        for i, arg in enumerate(sys.argv):
+            print(f'DEBUG: sys.argv[{i}] = {arg}')
+
+        # Get arguments from command line - CORRECT ORDER
+        data_source = sys.argv[1]      # --data-source value
+        data_config = sys.argv[2]      # --data-config value  
+        max_samples = int(sys.argv[3]) # --max-samples value
+        caption_strategy = sys.argv[4] # --caption-strategy value
+        caption_dataset_path = sys.argv[5]  # --caption-dataset path
+        dataset_metadata_path = sys.argv[6] # --dataset-metadata path
+        schema_output_path = sys.argv[7]    # --schema-output path
 
         print('[INFO] Loading from: ' + data_source)
         print('[INFO] Strategy: ' + caption_strategy)
@@ -111,25 +116,6 @@ implementation:
                 else:
                     return 'An image of ' + filename.replace('_', ' ')
 
-        def image_to_base64(image):
-            if isinstance(image, Image.Image):
-                img_buffer = io.BytesIO()
-                image.save(img_buffer, format='PNG')
-                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-            else:
-                pil_image = Image.fromarray(np.array(image))
-                img_buffer = io.BytesIO()
-                pil_image.save(img_buffer, format='PNG')
-                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-
-        def get_image_size(image):
-            if hasattr(image, 'size'):
-                return image.size
-            elif hasattr(image, 'shape'):
-                return (image.shape[1], image.shape[0])
-            else:
-                return 'unknown'
-
         # Main loading logic
         if data_source.startswith('cdn://'):
             dataset, metadata = load_cdn_zip_dataset(data_source, config, max_samples, caption_strategy)
@@ -156,7 +142,7 @@ implementation:
             json.dump(schema, f, indent=2)
 
         print('[SUCCESS] Loaded ' + str(len(dataset)) + ' samples from ' + data_source)
-        " "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
     args:
       - {inputValue: data_source}
       - {inputValue: data_config}
