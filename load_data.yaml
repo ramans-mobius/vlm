@@ -1,4 +1,4 @@
-name: Load Data
+name: 2 Load Data
 description: Universal data loader for image captioning - supports Hugging Face, CDN ZIP, and custom datasets.
 inputs:
   - {name: data_source, type: String, description: 'Dataset source: huggingface://dataset-name, cdn://url, or custom://type'}
@@ -13,122 +13,40 @@ implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
     command:
-      - bash
-      - -eux
+      - sh
       - -c
-      - |-
-        set -o pipefail
-        cat >/tmp/load_universal_data.py <<'PY'
-        import argparse, json, os, sys, pickle, base64, io, zipfile
+      - |
+        python3 -c "
+        import sys, os, pickle, json, base64, io, zipfile, argparse
         from urllib.parse import unquote, urlparse
         from PIL import Image
         import numpy as np
         import requests
+        
+        # Get arguments from command line
+        data_source = sys.argv[1]
+        data_config = sys.argv[2]
+        max_samples = int(sys.argv[3])
+        caption_strategy = sys.argv[4]
+        caption_dataset_path = sys.argv[5]
+        dataset_metadata_path = sys.argv[6]
+        schema_output_path = sys.argv[7]
+        
+        print(f'[INFO] Loading from: {data_source}')
+        print(f'[INFO] Strategy: {caption_strategy}')
+        print(f'[INFO] Max samples: {max_samples}')
+        
+        # Parse data config
+        try:
+            config = json.loads(data_config) if data_config else {}
+        except:
+            config = {}
 
-        def main():
-            ap = argparse.ArgumentParser()
-            ap.add_argument("--data-source", required=True)
-            ap.add_argument("--data-config", required=True)
-            ap.add_argument("--max-samples", type=int, required=True)
-            ap.add_argument("--caption-strategy", required=True)
-            ap.add_argument("--caption-dataset", required=True)
-            ap.add_argument("--dataset-metadata", required=True)
-            ap.add_argument("--schema-output", required=True)
-            args = ap.parse_args()
-
-            # Parse data config
-            try:
-                config = json.loads(args.data_config) if args.data_config else {}
-            except:
-                config = {}
-
-            print(f"[INFO] Loading from: {args.data_source}")
-            print(f"[INFO] Strategy: {args.caption_strategy}")
-            print(f"[INFO] Max samples: {args.max_samples}")
-
-            # Route to appropriate loader
-            if args.data_source.startswith('huggingface://'):
-                dataset, metadata = load_huggingface_dataset(args.data_source, config, args.max_samples)
-            elif args.data_source.startswith('cdn://'):
-                dataset, metadata = load_cdn_zip_dataset(args.data_source, config, args.max_samples, args.caption_strategy)
-            elif args.data_source.startswith('custom://'):
-                dataset, metadata = load_custom_dataset(args.data_source, config, args.max_samples, args.caption_strategy)
-            else:
-                # Auto-detect type
-                dataset, metadata = auto_detect_dataset(args.data_source, config, args.max_samples, args.caption_strategy)
-
-            # Save outputs
-            os.makedirs(os.path.dirname(args.caption_dataset) or ".", exist_ok=True)
-            with open(args.caption_dataset, 'wb') as f:
-                pickle.dump(dataset, f)
-
-            os.makedirs(os.path.dirname(args.dataset_metadata) or ".", exist_ok=True)
-            with open(args.dataset_metadata, 'wb') as f:
-                pickle.dump(metadata, f)
-
-            schema = {
-                "data_source": args.data_source,
-                "loading_strategy": args.caption_strategy,
-                "dataset_info": metadata,
-                "universal_compatibility": True
-            }
-            with open(args.schema_output, 'w') as f:
-                json.dump(schema, f, indent=2)
-
-            print(f"[SUCCESS] Loaded {len(dataset)} samples from {args.data_source}")
-
-        # === HUGGING FACE DATASET LOADER ===
-        def load_huggingface_dataset(data_source, config, max_samples):
-            from datasets import load_dataset
-            
-            dataset_name = data_source.replace('huggingface://', '')
-            split = config.get('split', 'train')
-            
-            print(f"   Loading Hugging Face dataset: {dataset_name}")
-            
-            dataset = load_dataset(dataset_name, split=split)
-            
-            if max_samples > 0:
-                dataset = dataset.select(range(min(max_samples, len(dataset))))
-            
-            caption_data = []
-            for i, item in enumerate(dataset):
-                try:
-                    image = item['image']
-                    caption = item.get('text', item.get('caption', 'No caption'))
-                    
-                    # Convert image to base64
-                    base64_image = image_to_base64(image)
-                    
-                    caption_data.append({
-                        'image_data': base64_image,
-                        'caption': caption,
-                        'original_caption': caption,
-                        'sample_id': i,
-                        'dataset_source': f'huggingface:{dataset_name}',
-                        'image_size': get_image_size(image),
-                        'caption_source': 'dataset_original'
-                    })
-                except Exception as e:
-                    print(f"   [WARN] Skipping sample {i}: {e}")
-                    continue
-
-            metadata = {
-                'source_type': 'huggingface',
-                'dataset_name': dataset_name,
-                'split': split,
-                'total_samples': len(caption_data),
-                'caption_strategy': 'use_existing',
-                'data_quality': 'high'
-            }
-            
-            return caption_data, metadata
-
-        # === CDN ZIP DATASET LOADER ===
+        # Your existing Python functions here (load_huggingface_dataset, load_cdn_zip_dataset, etc.)
         def load_cdn_zip_dataset(data_source, config, max_samples, caption_strategy):
             cdn_url = data_source.replace('cdn://', '')
             
-            print(f"   Loading CDN ZIP: {cdn_url}")
+            print(f'   Loading CDN ZIP: {cdn_url}')
             
             # Download and extract
             decoded_url = unquote(cdn_url)
@@ -165,7 +83,7 @@ implementation:
                                 'caption_source': caption_strategy
                             })
                     except Exception as e:
-                        print(f"   [WARN] Skipping {file_path}: {e}")
+                        print(f'   [WARN] Skipping {file_path}: {e}')
                         continue
 
             metadata = {
@@ -178,95 +96,54 @@ implementation:
             
             return caption_data, metadata
 
-        # === CUSTOM DATASET LOADER ===
-        def load_custom_dataset(data_source, config, max_samples, caption_strategy):
-            dataset_type = data_source.replace('custom://', '')
-            
-            print(f"   Loading custom dataset: {dataset_type}")
-            
-            # Add your custom dataset handlers here
-            if dataset_type == "coco":
-                return load_coco_dataset(config, max_samples)
-            elif dataset_type == "flickr":
-                return load_flickr_dataset(config, max_samples)
-            else:
-                raise ValueError(f"Unknown custom dataset type: {dataset_type}")
-
-        # === AUTO-DETECT DATASET ===
-        def auto_detect_dataset(data_source, config, max_samples, caption_strategy):
-            parsed = urlparse(data_source)
-            
-            if 'huggingface.co' in data_source or '/' in data_source and not parsed.scheme:
-                # Hugging Face dataset name
-                return load_huggingface_dataset(f'huggingface://{data_source}', config, max_samples)
-            elif data_source.startswith('http') and data_source.endswith('.zip'):
-                # CDN ZIP URL
-                return load_cdn_zip_dataset(f'cdn://{data_source}', config, max_samples, caption_strategy)
-            else:
-                raise ValueError(f"Could not auto-detect dataset type: {data_source}")
-
-        # === UTILITY FUNCTIONS ===
-        def image_to_base64(image):
-            if isinstance(image, Image.Image):
-                img_buffer = io.BytesIO()
-                image.save(img_buffer, format='PNG')
-                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-            else:
-                # Handle array images
-                pil_image = Image.fromarray(np.array(image))
-                img_buffer = io.BytesIO()
-                pil_image.save(img_buffer, format='PNG')
-                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-
-        def get_image_size(image):
-            if hasattr(image, 'size'):
-                return image.size
-            elif hasattr(image, 'shape'):
-                return (image.shape[1], image.shape[0])  # (width, height)
-            else:
-                return 'unknown'
-
         def generate_caption_from_path(file_path, strategy):
             filename = os.path.splitext(os.path.basename(file_path))[0]
             path_parts = file_path.split('/')
             
-            if strategy == "folder_based" and len(path_parts) > 1:
+            if strategy == 'folder_based' and len(path_parts) > 1:
                 class_name = path_parts[-2]
-                return f"A {class_name.replace('_', ' ')}"
-            elif strategy == "filename_based":
-                return f"An image of {filename.replace('_', ' ')}"
+                return f'A {class_name.replace(\"_\", \" \")}'
+            elif strategy == 'filename_based':
+                return f'An image of {filename.replace(\"_\", \" \")}'
             else:  # auto
                 if len(path_parts) > 1:
                     class_name = path_parts[-2]
-                    return f"A {class_name.replace('_', ' ')} showing {filename.replace('_', ' ')}"
+                    return f'A {class_name.replace(\"_\", \" \")} showing {filename.replace(\"_\", \" \")}'
                 else:
-                    return f"An image of {filename.replace('_', ' ')}"
+                    return f'An image of {filename.replace(\"_\", \" \")}'
 
-        # === CUSTOM DATASET HANDLERS ===
-        def load_coco_dataset(config, max_samples):
-            # Implementation for COCO dataset
-            return [], {'source_type': 'coco', 'status': 'not_implemented'}
+        # Main loading logic
+        if data_source.startswith('cdn://'):
+            dataset, metadata = load_cdn_zip_dataset(data_source, config, max_samples, caption_strategy)
+        else:
+            # Add other dataset type handlers
+            raise ValueError(f'Unsupported data source: {data_source}')
 
-        def load_flickr_dataset(config, max_samples):
-            # Implementation for Flickr dataset  
-            return [], {'source_type': 'flickr', 'status': 'not_implemented'}
+        # Save outputs
+        os.makedirs(os.path.dirname(caption_dataset_path) or '.', exist_ok=True)
+        with open(caption_dataset_path, 'wb') as f:
+            pickle.dump(dataset, f)
 
-        if __name__ == "__main__":
-            main()
-        PY
-        python3 -u /tmp/load_universal_data.py "$@"
+        os.makedirs(os.path.dirname(dataset_metadata_path) or '.', exist_ok=True)
+        with open(dataset_metadata_path, 'wb') as f:
+            pickle.dump(metadata, f)
+
+        schema = {
+            'data_source': data_source,
+            'loading_strategy': caption_strategy,
+            'dataset_info': metadata,
+            'universal_compatibility': True
+        }
+        with open(schema_output_path, 'w') as f:
+            json.dump(schema, f, indent=2)
+
+        print(f'[SUCCESS] Loaded {len(dataset)} samples from {data_source}')
+        " "$1" "$2" "$3" "$4" "$5" "$6" "$7"
     args:
-      - --data-source
       - {inputValue: data_source}
-      - --data-config
       - {inputValue: data_config}
-      - --max-samples
       - {inputValue: max_samples}
-      - --caption-strategy
       - {inputValue: caption_strategy}
-      - --caption-dataset
       - {outputPath: caption_dataset}
-      - --dataset-metadata
       - {outputPath: dataset_metadata}
-      - --schema-output
       - {outputPath: schema_json}
