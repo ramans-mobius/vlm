@@ -1,4 +1,4 @@
-name: Initialize Vision Encoder
+name: 2 Initialize Vision Encoder
 description: Initializes a vision encoder suitable for any image type using nesy-factory's vision encoders.
 inputs:
   - name: encoder_type
@@ -32,98 +32,82 @@ implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
     command:
-      - bash
-      - -eux
+      - sh
       - -c
-      - |-
-        set -o pipefail
-        cat >/tmp/initialize_generic_vision_encoder.py <<'PY'
-        import argparse, json, os, sys
+      - |
+        python3 -c "
+        import sys, os, json
 
-        def main():
-            ap = argparse.ArgumentParser()
-            ap.add_argument("--encoder-type", required=True)
-            ap.add_argument("--model-name", required=True)
-            ap.add_argument("--projection-dim", type=int, required=True)
-            ap.add_argument("--unfreeze-layers", type=int, required=True)
-            ap.add_argument("--image-types", required=True)
-            ap.add_argument("--encoder-config", required=True)
-            ap.add_argument("--encoder-report", required=True)
-            ap.add_argument("--schema-output", required=True)
-            args = ap.parse_args()
+        # Get arguments from command line
+        encoder_type = sys.argv[1]
+        model_name = sys.argv[2]
+        projection_dim = int(sys.argv[3])
+        unfreeze_layers = int(sys.argv[4])
+        image_types = sys.argv[5]
+        encoder_config_path = sys.argv[6]
+        encoder_report_path = sys.argv[7]
+        schema_output_path = sys.argv[8]
 
-            # Model recommendations based on image types
-            model_recommendations = {
-                "general": ["openai/clip-vit-base-patch32", "google/vit-base-patch16-224"],
-                "objects": ["facebook/detr-resnet-50", "microsoft/beit-base-patch16-224"],
-                "scenes": ["openai/clip-vit-large-patch14", "microsoft/swin-base-patch4-window7-224"],
-                "faces": "google/vit-base-patch16-224",
-                "medical": "microsoft/resnet-50",
-                "satellite": "microsoft/beit-base-patch16-224"
-            }
+        # Model recommendations based on image types
+        model_recommendations = {
+            'general': ['openai/clip-vit-base-patch32', 'google/vit-base-patch16-224'],
+            'objects': ['facebook/detr-resnet-50', 'microsoft/beit-base-patch16-224'],
+            'scenes': ['openai/clip-vit-large-patch14', 'microsoft/swin-base-patch4-window7-224'],
+            'faces': 'google/vit-base-patch16-224',
+            'medical': 'microsoft/resnet-50',
+            'satellite': 'microsoft/beit-base-patch16-224'
+        }
 
-            recommended_model = model_recommendations.get(args.image_types, args.model_name)
+        recommended_model = model_recommendations.get(image_types, model_name)
 
-            encoder_config = {
-                "encoder_type": args.encoder_type,
-                "model_name": args.model_name,
-                "recommended_model": recommended_model,
-                "projection_dim": args.projection_dim,
-                "unfreeze_layers": args.unfreeze_layers,
-                "image_types": args.image_types,
-                "device": "cuda" if os.system("nvidia-smi > /dev/null 2>&1") == 0 else "cpu",
-                "purpose": "generic_image_captioning"
-            }
+        encoder_config = {
+            'encoder_type': encoder_type,
+            'model_name': model_name,
+            'recommended_model': recommended_model,
+            'projection_dim': projection_dim,
+            'unfreeze_layers': unfreeze_layers,
+            'image_types': image_types,
+            'device': 'cuda' if os.system('nvidia-smi > /dev/null 2>&1') == 0 else 'cpu',
+            'purpose': 'generic_image_captioning'
+        }
 
-            report = {
-                "status": "success",
-                "encoder_type": args.encoder_type,
-                "model_name": args.model_name,
-                "projection_dim": args.projection_dim,
-                "unfreeze_layers": args.unfreeze_layers,
-                "image_types_supported": args.image_types,
-                "recommended_for": recommended_model,
-                "features": "generic_image_feature_extraction",
-                "output_dim": args.projection_dim,
-                "application": "universal_image_captioning"
-            }
+        report = {
+            'status': 'success',
+            'encoder_type': encoder_type,
+            'model_name': model_name,
+            'projection_dim': projection_dim,
+            'unfreeze_layers': unfreeze_layers,
+            'image_types_supported': image_types,
+            'recommended_for': recommended_model,
+            'features': 'generic_image_feature_extraction',
+            'output_dim': projection_dim,
+            'application': 'universal_image_captioning'
+        }
 
-            os.makedirs(os.path.dirname(args.encoder_config) or ".", exist_ok=True)
-            with open(args.encoder_config, "w") as f:
-                json.dump(encoder_config, f, indent=2)
+        os.makedirs(os.path.dirname(encoder_config_path) or '.', exist_ok=True)
+        with open(encoder_config_path, 'w') as f:
+            json.dump(encoder_config, f, indent=2)
 
-            with open(args.encoder_report, "w") as f:
-                json.dump(report, f, indent=2)
+        with open(encoder_report_path, 'w') as f:
+            json.dump(report, f, indent=2)
 
-            schema = {
-                "vision_encoder": encoder_config,
-                "capabilities": ["generic_feature_extraction", "multimodal_alignment", "cross_domain_understanding"],
-                "supported_domains": ["objects", "scenes", "people", "animals", "abstract", "technical"],
-                "flexibility": "high"
-            }
-            with open(args.schema_output, "w") as f:
-                json.dump(schema, f, indent=2)
+        schema = {
+            'vision_encoder': encoder_config,
+            'capabilities': ['generic_feature_extraction', 'multimodal_alignment', 'cross_domain_understanding'],
+            'supported_domains': ['objects', 'scenes', 'people', 'animals', 'abstract', 'technical'],
+            'flexibility': 'high'
+        }
+        with open(schema_output_path, 'w') as f:
+            json.dump(schema, f, indent=2)
 
-            print(f"[SUCCESS] Generic vision encoder config saved: {args.encoder_config}")
-
-        if __name__ == "__main__":
-            main()
-        PY
-        python3 -u /tmp/initialize_generic_vision_encoder.py "$@"
+        print(f'[SUCCESS] Generic vision encoder config saved: {encoder_config_path}')
+        " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
-      - --encoder-type
       - {inputValue: encoder_type}
-      - --model-name
       - {inputValue: model_name}
-      - --projection-dim
       - {inputValue: projection_dim}
-      - --unfreeze-layers
       - {inputValue: unfreeze_layers}
-      - --image-types
       - {inputValue: image_types}
-      - --encoder-config
       - {outputPath: encoder_config}
-      - --encoder-report
       - {outputPath: encoder_report}
-      - --schema-output
       - {outputPath: schema_json}
