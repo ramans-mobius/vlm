@@ -1,4 +1,4 @@
-name: 2 Load Data
+name: Load Data
 description: Universal data loader for image captioning - supports Hugging Face, CDN ZIP, and custom datasets.
 inputs:
   - {name: data_source, type: String, description: 'Dataset source: huggingface://dataset-name, cdn://url, or custom://type'}
@@ -17,12 +17,12 @@ implementation:
       - -c
       - |
         python3 -c "
-        import sys, os, pickle, json, base64, io, zipfile, argparse
+        import sys, os, pickle, json, base64, io, zipfile
         from urllib.parse import unquote, urlparse
         from PIL import Image
         import numpy as np
         import requests
-        
+
         # Get arguments from command line
         data_source = sys.argv[1]
         data_config = sys.argv[2]
@@ -31,22 +31,21 @@ implementation:
         caption_dataset_path = sys.argv[5]
         dataset_metadata_path = sys.argv[6]
         schema_output_path = sys.argv[7]
-        
-        print(f'[INFO] Loading from: {data_source}')
-        print(f'[INFO] Strategy: {caption_strategy}')
-        print(f'[INFO] Max samples: {max_samples}')
-        
+
+        print('[INFO] Loading from: ' + data_source)
+        print('[INFO] Strategy: ' + caption_strategy)
+        print('[INFO] Max samples: ' + str(max_samples))
+
         # Parse data config
         try:
             config = json.loads(data_config) if data_config else {}
         except:
             config = {}
 
-        # Your existing Python functions here (load_huggingface_dataset, load_cdn_zip_dataset, etc.)
         def load_cdn_zip_dataset(data_source, config, max_samples, caption_strategy):
             cdn_url = data_source.replace('cdn://', '')
             
-            print(f'   Loading CDN ZIP: {cdn_url}')
+            print('   Loading CDN ZIP: ' + cdn_url)
             
             # Download and extract
             decoded_url = unquote(cdn_url)
@@ -79,11 +78,11 @@ implementation:
                                 'original_caption': caption,
                                 'sample_id': i,
                                 'filename': file_path,
-                                'dataset_source': f'cdn:{cdn_url}',
+                                'dataset_source': 'cdn:' + cdn_url,
                                 'caption_source': caption_strategy
                             })
                     except Exception as e:
-                        print(f'   [WARN] Skipping {file_path}: {e}')
+                        print('   [WARN] Skipping ' + file_path + ': ' + str(e))
                         continue
 
             metadata = {
@@ -102,22 +101,41 @@ implementation:
             
             if strategy == 'folder_based' and len(path_parts) > 1:
                 class_name = path_parts[-2]
-                return f'A {class_name.replace(\"_\", \" \")}'
+                return 'A ' + class_name.replace('_', ' ')
             elif strategy == 'filename_based':
-                return f'An image of {filename.replace(\"_\", \" \")}'
+                return 'An image of ' + filename.replace('_', ' ')
             else:  # auto
                 if len(path_parts) > 1:
                     class_name = path_parts[-2]
-                    return f'A {class_name.replace(\"_\", \" \")} showing {filename.replace(\"_\", \" \")}'
+                    return 'A ' + class_name.replace('_', ' ') + ' showing ' + filename.replace('_', ' ')
                 else:
-                    return f'An image of {filename.replace(\"_\", \" \")}'
+                    return 'An image of ' + filename.replace('_', ' ')
+
+        def image_to_base64(image):
+            if isinstance(image, Image.Image):
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format='PNG')
+                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+            else:
+                pil_image = Image.fromarray(np.array(image))
+                img_buffer = io.BytesIO()
+                pil_image.save(img_buffer, format='PNG')
+                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+
+        def get_image_size(image):
+            if hasattr(image, 'size'):
+                return image.size
+            elif hasattr(image, 'shape'):
+                return (image.shape[1], image.shape[0])
+            else:
+                return 'unknown'
 
         # Main loading logic
         if data_source.startswith('cdn://'):
             dataset, metadata = load_cdn_zip_dataset(data_source, config, max_samples, caption_strategy)
         else:
             # Add other dataset type handlers
-            raise ValueError(f'Unsupported data source: {data_source}')
+            raise ValueError('Unsupported data source: ' + data_source)
 
         # Save outputs
         os.makedirs(os.path.dirname(caption_dataset_path) or '.', exist_ok=True)
@@ -137,7 +155,7 @@ implementation:
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print(f'[SUCCESS] Loaded {len(dataset)} samples from {data_source}')
+        print('[SUCCESS] Loaded ' + str(len(dataset)) + ' samples from ' + data_source)
         " "$1" "$2" "$3" "$4" "$5" "$6" "$7"
     args:
       - {inputValue: data_source}
