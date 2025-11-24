@@ -1,4 +1,4 @@
-name: Inference Load Images
+name: 2 Inference Load Images
 description: Universal test image loader - works with ANY data source for inference.
 inputs:
   - {name: test_source, type: String, description: 'Any source: huggingface, cdn, or reuse_training'}
@@ -13,73 +13,37 @@ implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
     command:
-      - bash
-      - -eux
+      - sh
       - -c
-      - |-
-        set -o pipefail
-        cat >/tmp/load_generic_test.py <<'PY'
-        import argparse, json, os, sys, pickle, base64, io, zipfile, random
+      - |
+        python3 -c "
+        import sys, os, pickle, json, base64, io, zipfile, random
         from urllib.parse import unquote
         import requests
         from datasets import load_dataset
         from PIL import Image
         import numpy as np
 
-        def main():
-            ap = argparse.ArgumentParser()
-            ap.add_argument("--test-source", required=True)
-            ap.add_argument("--source-config", required=True)
-            ap.add_argument("--num-samples", type=int, required=True)
-            ap.add_argument("--test-type", required=True)
-            ap.add_argument("--test-images", required=True)
-            ap.add_argument("--test-metadata", required=True)
-            ap.add_argument("--schema-output", required=True)
-            args = ap.parse_args()
+        # Get arguments from command line
+        test_source = sys.argv[1]
+        source_config = sys.argv[2]
+        num_samples = int(sys.argv[3])
+        test_type = sys.argv[4]
+        test_images_path = sys.argv[5]
+        test_metadata_path = sys.argv[6]
+        schema_output_path = sys.argv[7]
 
-            config = json.loads(args.source_config) if args.source_config else {}
-            
-            print(f"[INFO] Loading test images from: {args.test_source}")
-            print(f"[INFO] Test type: {args.test_type}")
-            print(f"[INFO] Samples: {args.num_samples}")
-
-            # Route to appropriate loader
-            if args.test_source.startswith('huggingface://'):
-                test_data, metadata = load_hf_test(args.test_source, config, args.num_samples, args.test_type)
-            elif args.test_source.startswith('cdn://'):
-                test_data, metadata = load_cdn_test(args.test_source, config, args.num_samples, args.test_type)
-            elif args.test_source == "reuse_training":
-                test_data, metadata = load_from_training_data(config, args.num_samples)
-            else:
-                # Auto-detect
-                test_data, metadata = auto_detect_test(args.test_source, config, args.num_samples, args.test_type)
-
-            # Save outputs
-            os.makedirs(os.path.dirname(args.test_images) or ".", exist_ok=True)
-            with open(args.test_images, 'wb') as f:
-                pickle.dump(test_data, f)
-
-            os.makedirs(os.path.dirname(args.test_metadata) or ".", exist_ok=True)
-            with open(args.test_metadata, 'wb') as f:
-                pickle.dump(metadata, f)
-
-            schema = {
-                "test_source": args.test_source,
-                "test_type": args.test_type,
-                "test_samples_loaded": len(test_data),
-                "has_ground_truth": metadata.get('has_ground_truth', False)
-            }
-            with open(args.schema_output, 'w') as f:
-                json.dump(schema, f, indent=2)
-
-            print(f"[SUCCESS] Loaded {len(test_data)} test images")
+        config = json.loads(source_config) if source_config else {}
+        
+        print(f'[INFO] Loading test images from: {test_source}')
+        print(f'[INFO] Test type: {test_type}')
+        print(f'[INFO] Samples: {num_samples}')
 
         def load_cdn_test(source, config, num_samples, test_type):
-      
             cdn_url = source.replace('cdn://', '')
             caption_strategy = config.get('caption_strategy', 'folder_based')
             
-            print(f"   Loading CDN test images: {cdn_url}")
+            print(f'   Loading CDN test images: {cdn_url}')
             
             # Download ZIP
             decoded_url = unquote(cdn_url)
@@ -95,7 +59,7 @@ implementation:
                              if any(f.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'])]
                 
                 # For testing, we might want a random subset
-                if test_type == "holdout":
+                if test_type == 'holdout':
                     # Use a percentage for testing
                     test_count = min(num_samples, int(len(image_files) * 0.2))
                     test_files = random.sample(image_files, test_count)
@@ -121,7 +85,7 @@ implementation:
                                 'caption_strategy': caption_strategy
                             })
                     except Exception as e:
-                        print(f"   [WARN] Skipping {file_path}: {e}")
+                        print(f'   [WARN] Skipping {file_path}: {e}')
                         continue
 
             metadata = {
@@ -136,13 +100,12 @@ implementation:
             return test_data, metadata
 
         def load_hf_test(source, config, num_samples, test_type):
-       
             dataset_name = source.replace('huggingface://', '')
             split = config.get('split', 'validation')
             if split == 'auto':
                 split = 'test' if 'test' in load_dataset(dataset_name).keys() else 'validation'
             
-            print(f"   Loading HF test split: {split} from {dataset_name}")
+            print(f'   Loading HF test split: {split} from {dataset_name}')
             
             dataset = load_dataset(dataset_name, split=split)
             test_data = []
@@ -164,7 +127,7 @@ implementation:
                         'split': split
                     })
                 except Exception as e:
-                    print(f"   [WARN] Skipping test sample {i}: {e}")
+                    print(f'   [WARN] Skipping test sample {i}: {e}')
                     continue
 
             metadata = {
@@ -190,26 +153,24 @@ implementation:
             return test_data, metadata
 
         def auto_detect_test(source, config, num_samples, test_type):
-         
             if source.startswith('http') and source.endswith('.zip'):
                 return load_cdn_test(f'cdn://{source}', config, num_samples, test_type)
             elif '/' in source and not source.startswith('http'):
                 return load_hf_test(f'huggingface://{source}', config, num_samples, test_type)
             else:
-                raise ValueError(f"Could not auto-detect test source: {source}")
+                raise ValueError(f'Could not auto-detect test source: {source}')
 
         def generate_ground_truth_caption(file_path, strategy):
-        
             filename = os.path.splitext(os.path.basename(file_path))[0]
             path_parts = file_path.split('/')
             
-            if strategy == "folder_based" and len(path_parts) > 1:
-                class_name = path_parts[-2]  # e.g., "inputfield" or "toggle"
-                return f"A {class_name} component in user interface"
-            elif strategy == "filename_based":
-                return f"An image showing {filename.replace('_', ' ')}"
+            if strategy == 'folder_based' and len(path_parts) > 1:
+                class_name = path_parts[-2]  # e.g., 'inputfield' or 'toggle'
+                return f'A {class_name} component in user interface'
+            elif strategy == 'filename_based':
+                return f'An image showing {filename.replace(\"_\", \" \")}'
             else:
-                return f"UI component: {filename.replace('_', ' ')}"
+                return f'UI component: {filename.replace(\"_\", \" \")}'
 
         def image_to_base64(image):
             if isinstance(image, Image.Image):
@@ -237,22 +198,42 @@ implementation:
             except:
                 return 'unknown'
 
-        if __name__ == "__main__":
-            main()
-        PY
-        python3 -u /tmp/load_generic_test.py "$@"
+        # Route to appropriate loader
+        if test_source.startswith('huggingface://'):
+            test_data, metadata = load_hf_test(test_source, config, num_samples, test_type)
+        elif test_source.startswith('cdn://'):
+            test_data, metadata = load_cdn_test(test_source, config, num_samples, test_type)
+        elif test_source == 'reuse_training':
+            test_data, metadata = load_from_training_data(config, num_samples)
+        else:
+            # Auto-detect
+            test_data, metadata = auto_detect_test(test_source, config, num_samples, test_type)
+
+        # Save outputs
+        os.makedirs(os.path.dirname(test_images_path) or '.', exist_ok=True)
+        with open(test_images_path, 'wb') as f:
+            pickle.dump(test_data, f)
+
+        os.makedirs(os.path.dirname(test_metadata_path) or '.', exist_ok=True)
+        with open(test_metadata_path, 'wb') as f:
+            pickle.dump(metadata, f)
+
+        schema = {
+            'test_source': test_source,
+            'test_type': test_type,
+            'test_samples_loaded': len(test_data),
+            'has_ground_truth': metadata.get('has_ground_truth', False)
+        }
+        with open(schema_output_path, 'w') as f:
+            json.dump(schema, f, indent=2)
+
+        print(f'[SUCCESS] Loaded {len(test_data)} test images')
+        " "$1" "$2" "$3" "$4" "$5" "$6" "$7"
     args:
-      - --test-source
       - {inputValue: test_source}
-      - --source-config
       - {inputValue: source_config}
-      - --num-samples
       - {inputValue: num_samples}
-      - --test-type
       - {inputValue: test_type}
-      - --test-images
       - {outputPath: test_images}
-      - --test-metadata
       - {outputPath: test_metadata}
-      - --schema-output
       - {outputPath: schema_json}
