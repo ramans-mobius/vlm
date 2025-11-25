@@ -1,0 +1,322 @@
+name: Build Generic Image-to-Text Model
+description: Builds a generic image-to-text model suitable for any domain using nesy-factory components.
+inputs:
+  - name: tokenizer_json
+    type: Model
+  - name: vision_encoder_config
+    type: Data
+  - name: language_model_name
+    type: String
+    default: "microsoft/git-base"
+  - name: model_architecture
+    type: String
+    default: "cross_attention"
+    description: 'Model architecture: cross_attention, concatenation, transformer'
+  - name: domain_specialization
+    type: String
+    default: "general"
+    description: 'Optional domain specialization: general, medical, technical, artistic, etc.'
+outputs:
+  - name: model_config
+    type: Data
+  - name: model_weights
+  - type: Model
+  - name: model_py
+    type: Data
+  - name: schema_json
+    type: Data
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v29
+    command:
+      - sh
+      - -c
+      - |
+        python3 -c "
+        import sys, os, json, torch
+        
+        print('Number of arguments:', len(sys.argv))
+        print('Arguments:', sys.argv)
+        
+        # Get arguments from command line
+        tokenizer_json_path = sys.argv[1]
+        vision_encoder_config_path = sys.argv[2]
+        language_model_name = sys.argv[3]
+        model_architecture = sys.argv[4]
+        domain_specialization = sys.argv[5]
+        model_config_path = sys.argv[6]
+        model_weights_path = sys.argv[7]
+        model_py_path = sys.argv[8]
+        schema_output_path = sys.argv[9]
+
+        print('Starting generic image-to-text model building...')
+        print('Tokenizer path: ' + tokenizer_json_path)
+        print('Vision encoder config: ' + vision_encoder_config_path)
+        print('Language model: ' + language_model_name)
+        print('Model architecture: ' + model_architecture)
+        print('Domain specialization: ' + domain_specialization)
+
+        # Load vision encoder config
+        with open(vision_encoder_config_path, 'r') as f:
+            vision_config = json.load(f)
+
+        # Load tokenizer to get vocab info
+        try:
+            from tokenizers import Tokenizer
+            tok = Tokenizer.from_file(tokenizer_json_path)
+            vocab_size = tok.get_vocab_size()
+            print('Loaded tokenizer with vocab size: ' + str(vocab_size))
+        except Exception as e:
+            print('WARN: Could not load tokenizer, using default vocab size: ' + str(e))
+            vocab_size = 50257  # Default GPT-2 vocab size
+
+        # Domain-specific configurations
+        domain_configs = {
+            'general': {
+                'max_caption_length': 128,
+                'fusion_heads': 8,
+                'temperature': 1.0
+            },
+            'medical': {
+                'max_caption_length': 256,
+                'fusion_heads': 12,
+                'temperature': 0.8
+            },
+            'technical': {
+                'max_caption_length': 200,
+                'fusion_heads': 10,
+                'temperature': 0.9
+            },
+            'artistic': {
+                'max_caption_length': 150,
+                'fusion_heads': 8,
+                'temperature': 1.2
+            }
+        }
+        
+        domain_config = domain_configs.get(domain_specialization, domain_configs['general'])
+
+        # Create generic image-to-text model configuration
+        model_config = {
+            'model_type': 'generic_image_to_text',
+            'task': 'universal_image_captioning',
+            'language_model_name': language_model_name,
+            'vision_encoder': vision_config,
+            'model_architecture': model_architecture,
+            'domain_specialization': domain_specialization,
+            'vocab_size': vocab_size,
+            'max_caption_length': domain_config['max_caption_length'],
+            'image_size': 224,
+            'fusion_method': model_architecture,
+            'fusion_heads': domain_config['fusion_heads'],
+            'default_temperature': domain_config['temperature'],
+            'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+            'flexibility': 'high',
+            'supported_domains': ['objects', 'scenes', 'people', 'animals', 'abstract', 'technical', 'medical', 'artistic']
+        }
+
+        # Generate generic image-to-text model code
+        def generate_model_code(config):
+            fusion_implementations = {
+                'cross_attention': '''
+                        # Cross-attention fusion
+                        self.cross_attention = nn.MultiheadAttention(
+                            embed_dim=text_dim,
+                            num_heads=config['fusion_heads'],
+                            batch_first=True
+                        )
+                        
+                        def fuse_features(self, text_embeddings, visual_features):
+                            fused_embeddings, _ = self.cross_attention(
+                                query=text_embeddings,
+                                key=visual_features,
+                                value=visual_features
+                            )
+                            return self.layer_norm(fused_embeddings)
+                ''',
+                'concatenation': '''
+                        # Concatenation fusion
+                        self.fusion_proj = nn.Linear(text_dim + vision_dim, text_dim)
+                        
+                        def fuse_features(self, text_embeddings, visual_features):
+                            # Repeat visual features to match text sequence length
+                            visual_expanded = visual_features.expand(-1, text_embeddings.size(1), -1)
+                            concatenated = torch.cat([text_embeddings, visual_expanded], dim=-1)
+                            return self.fusion_proj(concatenated)
+                ''',
+                'transformer': '''
+                        # Transformer fusion
+                        self.fusion_transformer = nn.TransformerEncoder(
+                            nn.TransformerEncoderLayer(
+                                d_model=text_dim,
+                                nhead=config['fusion_heads'],
+                                batch_first=True
+                            ),
+                            num_layers=2
+                        )
+                        
+                        def fuse_features(self, text_embeddings, visual_features):
+                            # Combine text and visual features
+                            visual_expanded = visual_features.expand(-1, text_embeddings.size(1), -1)
+                            combined = text_embeddings + visual_expanded
+                            return self.fusion_transformer(combined)
+                '''
+            }
+            
+            fusion_code = fusion_implementations.get(config['model_architecture'], fusion_implementations['cross_attention'])
+            
+            return '''import torch
+import torch.nn as nn
+from transformers import AutoModelForCausalLM
+from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+
+class GenericImageToTextModel(nn.Module):
+    
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        
+        # Vision encoder - processes any type of image
+        self.vision_encoder = CLIPVisionEncoder(
+            model_name=config['vision_encoder']['model_name'],
+            projection_dim=config['vision_encoder'].get('projection_dim', 512),
+            unfreeze_layers=config['vision_encoder'].get('unfreeze_layers', 0)
+        )
+        
+        # Language model - generates descriptions
+        self.language_model = AutoModelForCausalLM.from_pretrained(
+            config['language_model_name']
+        )
+        
+        # Project vision features to language model space
+        vision_dim = config['vision_encoder'].get('projection_dim', 512)
+        text_dim = self.language_model.config.hidden_size
+        
+        self.vision_proj = nn.Linear(vision_dim, text_dim)
+        self.layer_norm = nn.LayerNorm(text_dim)
+        
+        # Fusion module
+''' + fusion_code + '''
+    
+    def forward(self, images, input_ids=None, attention_mask=None, labels=None):
+        # Extract visual features from any image type
+        visual_features = self.vision_encoder.run(images)
+        visual_features = self.vision_proj(visual_features)
+        visual_features = visual_features.unsqueeze(1)  # [batch_size, 1, text_dim]
+        
+        if input_ids is not None:
+            # Training mode
+            text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+            fused_embeddings = self.fuse_features(text_embeddings, visual_features)
+            
+            outputs = self.language_model(
+                inputs_embeds=fused_embeddings,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            return outputs
+        else:
+            # Inference mode
+            return visual_features
+    
+    def generate(self, images, tokenizer, max_length=None, temperature=None, top_k=50):
+        self.eval()
+        
+        max_length = max_length or self.config['max_caption_length']
+        temperature = temperature or self.config['default_temperature']
+        
+        with torch.no_grad():
+            visual_features = self.vision_encoder.run(images)
+            visual_features = self.vision_proj(visual_features)
+            visual_features = visual_features.unsqueeze(1)
+            
+            batch_size = visual_features.shape[0]
+            device = visual_features.device
+            
+            input_ids = torch.tensor([[tokenizer.bos_token_id]] * batch_size).to(device)
+            generated_ids = input_ids.clone()
+            
+            for step in range(max_length):
+                text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+                fused_embeddings = self.fuse_features(text_embeddings, visual_features)
+                
+                outputs = self.language_model(inputs_embeds=fused_embeddings)
+                next_token_logits = outputs.logits[:, -1, :]
+                
+                next_token_logits = next_token_logits / temperature
+                
+                if top_k is not None:
+                    indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
+                    next_token_logits[indices_to_remove] = -float('inf')
+                
+                probs = torch.softmax(next_token_logits, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1)
+                
+                generated_ids = torch.cat([generated_ids, next_tokens], dim=1)
+                input_ids = next_tokens
+                
+                if (next_tokens == tokenizer.eos_token_id).all():
+                    break
+            
+            return generated_ids
+'''
+
+        model_code = generate_model_code(model_config)
+
+        # Ensure output directories exist
+        os.makedirs(os.path.dirname(model_config_path) or '.', exist_ok=True)
+        with open(model_config_path, 'w') as f:
+            json.dump(model_config, f, indent=2)
+
+        os.makedirs(os.path.dirname(model_py_path) or '.', exist_ok=True)
+        with open(model_py_path, 'w') as f:
+            f.write(model_code)
+
+        # Create initial weights
+        initial_state = {
+            'model_type': 'generic_image_to_text',
+            'initialized': True,
+            'components': ['vision_encoder', 'language_model', 'fusion_module'],
+            'domain': domain_specialization,
+            'architecture': model_architecture,
+            'purpose': 'universal_image_captioning',
+            'config': model_config
+        }
+        
+        os.makedirs(os.path.dirname(model_weights_path) or '.', exist_ok=True)
+        torch.save(initial_state, model_weights_path)
+
+        schema = {
+            'model_type': 'generic_image_to_text',
+            'task': 'universal_image_captioning', 
+            'input_type': 'any_image',
+            'output_type': 'descriptive_text',
+            'architecture': model_architecture,
+            'domain_specialization': domain_specialization,
+            'flexibility': 'high',
+            'supported_applications': [
+                'object_description', 'scene_captioning', 'document_analysis',
+                'medical_imaging', 'technical_diagrams', 'artistic_critique',
+                'accessibility', 'content_moderation', 'educational_tools'
+            ]
+        }
+        
+        os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
+        with open(schema_output_path, 'w') as f:
+            json.dump(schema, f, indent=2)
+
+        print('Generic Image-to-Text model building complete!')
+        print('Model config saved to: ' + model_config_path)
+        print('Model code saved to: ' + model_py_path)
+        print('Initial weights saved to: ' + model_weights_path)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+    args:
+      - {inputPath: tokenizer_json}
+      - {inputPath: vision_encoder_config}
+      - {inputValue: language_model_name}
+      - {inputValue: model_architecture}
+      - {inputValue: domain_specialization}
+      - {outputPath: model_config}
+      - {outputPath: model_weights}
+      - {outputPath: model_py}
+      - {outputPath: schema_json}
