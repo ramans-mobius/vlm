@@ -64,7 +64,7 @@ implementation:
                 config = {}
 
             def load_cdn_zip_dataset(url, config, max_samples, strategy):
-                """Load dataset from CDN ZIP URL"""
+         
                 print(f'[INFO] Loading CDN ZIP from: {url}')
                 
                 # Download and extract
@@ -136,7 +136,7 @@ implementation:
                 return caption_data
 
             def generate_caption_from_path(file_path, strategy):
-                """Generate caption from file path based on strategy"""
+                
                 filename = os.path.splitext(os.path.basename(file_path))[0]
                 path_parts = [p for p in file_path.split('/') if p]  # Remove empty parts
                 
