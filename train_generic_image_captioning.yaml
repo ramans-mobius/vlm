@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning
+name: 2 Train Generic Image Captioning
 description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
 inputs:
   - name: tokenizer_json
@@ -18,7 +18,7 @@ inputs:
   - name: training_parameters
     type: String
     default: "{}"
-    description: 'JSON string with additional training parameters (learning_rate, num_epochs, etc.)'
+    description: 'JSON string with training parameters (learning_rate, num_epochs, etc.)'
 outputs:
   - name: trained_model
     type: Model
@@ -44,7 +44,7 @@ implementation:
         # Get arguments from command line
         tokenizer_json_path = sys.argv[1]
         vision_encoder_config_path = sys.argv[2]
-        model_config_path = sys.argv[3]  # File path from parent brick
+        model_config_path = sys.argv[3]
         model_weights_path = sys.argv[4]
         model_py_path = sys.argv[5]
         caption_dataset_path = sys.argv[6]
@@ -56,16 +56,18 @@ implementation:
         schema_output_path = sys.argv[12]
 
         print('Starting generic image captioning training...')
+        print('Training parameters string:', training_params_str)
 
         # Load model config from parent brick (file path)
         with open(model_config_path, 'r') as f:
             model_config = json.load(f)
         print('Loaded model config from parent brick')
 
-        # Parse training parameters from JSON string with escape sequence handling
+        # Parse training parameters from JSON string - handles escape sequences automatically
         try:
             training_params = json.loads(training_params_str) if training_params_str and training_params_str.strip() not in ['{}', ''] else {}
             print('Successfully parsed training parameters from JSON string')
+            print('Parsed training parameters:', training_params)
         except json.JSONDecodeError as e:
             print('WARN: Invalid training_parameters JSON: ' + str(e) + ', using empty training params')
             training_params = {}
