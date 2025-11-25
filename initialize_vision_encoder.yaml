@@ -1,4 +1,4 @@
-name: 2 Initialize Vision Encoder
+name: Initialize Vision Encoder
 description: Initializes a vision encoder suitable for any image type using nesy-factory's vision encoders.
 inputs:
   - name: encoder_type
@@ -37,7 +37,10 @@ implementation:
       - |
         python3 -c "
         import sys, os, json
-
+        
+        print('Number of arguments:', len(sys.argv))
+        print('Arguments:', sys.argv)
+        
         # Get arguments from command line
         encoder_type = sys.argv[1]
         model_name = sys.argv[2]
@@ -47,6 +50,13 @@ implementation:
         encoder_config_path = sys.argv[6]
         encoder_report_path = sys.argv[7]
         schema_output_path = sys.argv[8]
+
+        print('Starting vision encoder initialization...')
+        print('Encoder type: ' + encoder_type)
+        print('Model name: ' + model_name)
+        print('Projection dim: ' + str(projection_dim))
+        print('Unfreeze layers: ' + str(unfreeze_layers))
+        print('Image types: ' + image_types)
 
         # Model recommendations based on image types
         model_recommendations = {
@@ -84,10 +94,12 @@ implementation:
             'application': 'universal_image_captioning'
         }
 
+        # Ensure output directories exist
         os.makedirs(os.path.dirname(encoder_config_path) or '.', exist_ok=True)
         with open(encoder_config_path, 'w') as f:
             json.dump(encoder_config, f, indent=2)
 
+        os.makedirs(os.path.dirname(encoder_report_path) or '.', exist_ok=True)
         with open(encoder_report_path, 'w') as f:
             json.dump(report, f, indent=2)
 
@@ -97,11 +109,13 @@ implementation:
             'supported_domains': ['objects', 'scenes', 'people', 'animals', 'abstract', 'technical'],
             'flexibility': 'high'
         }
+        
+        os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print(f'[SUCCESS] Generic vision encoder config saved: {encoder_config_path}')
-        " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+        print('Vision encoder initialization complete! Config saved to: ' + encoder_config_path)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7"
     args:
       - {inputValue: encoder_type}
       - {inputValue: model_name}
