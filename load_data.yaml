@@ -1,4 +1,4 @@
-name: 2 Load Data 
+name: Load Data 
 description: Universal data loader for image captioning - supports Hugging Face, CDN ZIP, and custom datasets.
 inputs:
   - {name: data_source, type: String, description: 'Dataset source: huggingface://dataset-name, cdn://url, or custom://type'}
@@ -26,7 +26,7 @@ implementation:
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
         
-        # Get args directly from command line - EXACT SAME PATTERN AS WORKING BRICK
+        # Get args directly from command line
         data_source = sys.argv[1]
         data_config = sys.argv[2]
         max_samples = int(sys.argv[3])
@@ -36,21 +36,20 @@ implementation:
         schema_output_path = sys.argv[7]
         
         print('Starting dataset loading...')
-        print(f'Data source: {data_source}')
-        print(f'Data config: {data_config}')
-        print(f'Max samples: {max_samples}')
-        print(f'Caption strategy: {caption_strategy}')
+        print('Data source: ' + data_source)
+        print('Data config: ' + data_config)
+        print('Max samples: ' + str(max_samples))
+        print('Caption strategy: ' + caption_strategy)
         
         # Parse data config
         try:
             config = json.loads(data_config) if data_config and data_config.strip() not in ['{}', ''] else {}
         except json.JSONDecodeError as e:
-            print(f'[WARN] Invalid data_config JSON: {e}, using empty config')
+            print('WARN: Invalid data_config JSON: ' + str(e) + ', using empty config')
             config = {}
 
         def load_cdn_zip_dataset(url, config, max_samples, strategy):
-            '''Load dataset from CDN ZIP URL'''
-            print(f'Loading CDN ZIP from: {url}')
+            print('Loading CDN ZIP from: ' + url)
             
             # Download and extract
             decoded_url = unquote(url)
@@ -60,7 +59,7 @@ implementation:
                 response = requests.get(decoded_url, headers=headers, timeout=60)
                 response.raise_for_status()
             except requests.RequestException as e:
-                raise Exception(f'Failed to download from {url}: {e}')
+                raise Exception('Failed to download from ' + url + ': ' + str(e))
             
             zip_content = io.BytesIO(response.content)
             caption_data = []
@@ -74,11 +73,11 @@ implementation:
                         if any(lower_path.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp']):
                             image_files.append(file_path)
                     
-                    print(f'Found {len(image_files)} image files in ZIP')
+                    print('Found ' + str(len(image_files)) + ' image files in ZIP')
                     
                     if max_samples > 0:
                         image_files = image_files[:max_samples]
-                        print(f'Limiting to {max_samples} samples')
+                        print('Limiting to ' + str(max_samples) + ' samples')
                     
                     for i, file_path in enumerate(image_files):
                         try:
@@ -90,7 +89,7 @@ implementation:
                                     image = Image.open(io.BytesIO(image_data))
                                     image.verify()
                                 except Exception as e:
-                                    print(f'Skipping invalid image {file_path}: {e}')
+                                    print('Skipping invalid image ' + file_path + ': ' + str(e))
                                     continue
                                 
                                 base64_image = base64.b64encode(image_data).decode('utf-8')
@@ -104,15 +103,15 @@ implementation:
                                     'original_caption': caption,
                                     'sample_id': i,
                                     'filename': file_path,
-                                    'dataset_source': f'cdn:{url}',
+                                    'dataset_source': 'cdn:' + url,
                                     'caption_source': strategy
                                 })
                                 
                                 if (i + 1) % 100 == 0:
-                                    print(f'Processed {i + 1} images...')
+                                    print('Processed ' + str(i + 1) + ' images...')
                                     
                         except Exception as e:
-                            print(f'Skipping {file_path}: {e}')
+                            print('Skipping ' + file_path + ': ' + str(e))
                             continue
                             
             except zipfile.BadZipFile:
@@ -121,21 +120,24 @@ implementation:
             return caption_data
 
         def generate_caption_from_path(file_path, strategy):
-            '''Generate caption from file path based on strategy'''
             filename = os.path.splitext(os.path.basename(file_path))[0]
-            path_parts = [p for p in file_path.split('/') if p]  # Remove empty parts
+            path_parts = [p for p in file_path.split('/') if p]
             
+            # Use simple string concatenation instead of f-strings to avoid escaping issues
             if strategy == 'folder_based' and len(path_parts) > 1:
-                class_name = path_parts[-2]  # Parent folder
-                return f'A {class_name.replace(\"_\", \" \")}'
+                class_name = path_parts[-2].replace('_', ' ')
+                return 'A ' + class_name
             elif strategy == 'filename_based':
-                return f'An image of {filename.replace(\"_\", \" \")}'
+                clean_filename = filename.replace('_', ' ')
+                return 'An image of ' + clean_filename
             else:  # auto or default
                 if len(path_parts) > 1:
-                    class_name = path_parts[-2]
-                    return f'A {class_name.replace(\"_\", \" \")} showing {filename.replace(\"_\", \" \")}'
+                    class_name = path_parts[-2].replace('_', ' ')
+                    clean_filename = filename.replace('_', ' ')
+                    return 'A ' + class_name + ' showing ' + clean_filename
                 else:
-                    return f'An image of {filename.replace(\"_\", \" \")}'
+                    clean_filename = filename.replace('_', ' ')
+                    return 'An image of ' + clean_filename
 
         # Main loading logic
         if data_source.startswith('cdn://'):
@@ -152,7 +154,7 @@ implementation:
             }
             
         else:
-            raise ValueError(f'Unsupported data source protocol: {data_source}')
+            raise ValueError('Unsupported data source protocol: ' + data_source)
 
         # Ensure output directories exist
         os.makedirs(os.path.dirname(caption_dataset_path) or '.', exist_ok=True)
@@ -177,7 +179,7 @@ implementation:
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print(f'Dataset loading complete! Loaded {len(dataset)} samples from {data_source}')
+        print('Dataset loading complete! Loaded ' + str(len(dataset)) + ' samples from ' + data_source)
         " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
     args:
       - {inputValue: data_source}
