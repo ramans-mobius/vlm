@@ -1,4 +1,4 @@
-name: 2 Train Generic Image Captioning
+name: Train Generic Image Captioning
 description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
 inputs:
   - name: tokenizer_json
