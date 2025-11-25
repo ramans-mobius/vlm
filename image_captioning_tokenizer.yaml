@@ -1,0 +1,148 @@
+name: Image Captioning Tokenizer
+description: Initializes a Hugging Face tokenizer for generic image captioning using nesy-factory's HFTokenizer.
+inputs:
+  - name: tokenizer_name
+    type: String
+    default: "microsoft/git-base"
+    description: 'Hugging Face tokenizer name'
+  - name: caption_dataset
+    type: Dataset
+    description: 'Dataset containing captions for vocabulary analysis'
+outputs:
+  - name: tokenizer_json
+    type: Model
+  - name: tokenizer_report
+    type: Data
+  - name: schema_json
+    type: Data
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v29
+    command:
+      - sh
+      - -c
+      - |
+        python3 -c "
+        import sys, os, json, pickle
+        
+        print('Number of arguments:', len(sys.argv))
+        print('Arguments:', sys.argv)
+        
+        # Get arguments from command line
+        tokenizer_name = sys.argv[1]
+        caption_dataset_path = sys.argv[2]
+        tokenizer_json_path = sys.argv[3]
+        tokenizer_report_path = sys.argv[4]
+        schema_output_path = sys.argv[5]
+
+        print('Starting tokenizer initialization...')
+        print('Tokenizer name: ' + tokenizer_name)
+        print('Caption dataset path: ' + caption_dataset_path)
+
+        try:
+            from nesy_factory.language_model.image_tokenizer import HFTokenizer
+            print('Successfully imported HFTokenizer')
+        except ImportError as e:
+            error_msg = 'HFTokenizer import failed: ' + str(e)
+            print('ERROR: ' + error_msg)
+            
+            # Save error report
+            error_report = {
+                'status': 'error',
+                'error': error_msg,
+                'available_components': ['ByteLevelBPETokenizer']
+            }
+            
+            # Ensure output directories exist
+            os.makedirs(os.path.dirname(tokenizer_report_path) or '.', exist_ok=True)
+            with open(tokenizer_report_path, 'w') as f:
+                json.dump(error_report, f, indent=2)
+            
+            # Save empty schema
+            schema = {
+                'tokenizer_name': tokenizer_name,
+                'status': 'error',
+                'error': error_msg
+            }
+            os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
+            with open(schema_output_path, 'w') as f:
+                json.dump(schema, f, indent=2)
+            
+            sys.exit(1)
+
+        # Load caption dataset to analyze vocabulary
+        try:
+            with open(caption_dataset_path, 'rb') as f:
+                caption_data = pickle.load(f)
+            
+            # Extract all captions for vocabulary analysis
+            all_captions = []
+            caption_classes = []
+            
+            for item in caption_data:
+                if 'caption' in item:
+                    all_captions.append(item['caption'])
+                if 'alternative_captions' in item:
+                    all_captions.extend(item['alternative_captions'])
+                if 'class_name' in item:
+                    caption_classes.append(item['class_name'])
+                elif 'label' in item:
+                    caption_classes.append(item['label'])
+            
+            print('Analyzed ' + str(len(all_captions)) + ' captions for tokenizer')
+            print('Found ' + str(len(set(caption_classes))) + ' unique caption classes')
+            print('Sample captions: ' + str(all_captions[:3]))
+            
+        except Exception as e:
+            print('WARN: Failed to load caption dataset: ' + str(e))
+            all_captions = ['sample caption for initialization']
+            caption_classes = ['general']
+
+        # Initialize tokenizer
+        tokenizer = HFTokenizer()
+        report = tokenizer.run(
+            tokenizer_name=tokenizer_name,
+            add_special_tokens=True
+        )
+
+        # Ensure output directories exist
+        os.makedirs(os.path.dirname(tokenizer_json_path) or '.', exist_ok=True)
+        tokenizer.save(tokenizer_json_path)
+
+        # Add caption analysis to report
+        report['caption_analysis'] = {
+            'total_captions': len(all_captions),
+            'unique_captions': len(set(all_captions)),
+            'sample_captions': all_captions[:5],
+            'caption_classes': list(set(caption_classes)) if caption_classes else ['general']
+        }
+
+        # Save tokenizer report
+        os.makedirs(os.path.dirname(tokenizer_report_path) or '.', exist_ok=True)
+        with open(tokenizer_report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+
+        # Save schema
+        schema = {
+            'tokenizer_name': tokenizer_name,
+            'vocab_size': report.get('vocab_size'),
+            'model_max_length': report.get('model_max_length'),
+            'caption_classes': report['caption_analysis']['caption_classes'],
+            'purpose': 'generic_image_captioning',
+            'status': 'success'
+        }
+        
+        os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
+        with open(schema_output_path, 'w') as f:
+            json.dump(schema, f, indent=2)
+
+        print('Tokenizer initialization complete!')
+        print('Tokenizer saved to: ' + tokenizer_json_path)
+        print('Vocabulary size: ' + str(report.get('vocab_size', 'unknown')))
+        " "$0" "$1" "$2" "$3" "$4"
+    args:
+      - {inputValue: tokenizer_name}
+      - {inputPath: caption_dataset}
+      - {outputPath: tokenizer_json}
+      - {outputPath: tokenizer_report}
+      - {outputPath: schema_json}
