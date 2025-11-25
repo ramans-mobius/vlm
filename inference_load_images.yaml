@@ -1,4 +1,4 @@
-name: 2 Inference Load Images
+name: Inference Load Images
 description: Universal test image loader - works with ANY data source for inference.
 inputs:
   - {name: test_source, type: String, description: 'Any source: huggingface, cdn, or reuse_training'}
@@ -23,9 +23,12 @@ implementation:
         from datasets import load_dataset
         from PIL import Image
         import numpy as np
-
+        
+        print('Number of arguments:', len(sys.argv))
+        print('Arguments:', sys.argv)
+        
         # Get arguments from command line
-        test_source = sys.argv[1]
+        test_source = sys.argv[1].strip()
         source_config = sys.argv[2]
         num_samples = int(sys.argv[3])
         test_type = sys.argv[4]
@@ -33,30 +36,51 @@ implementation:
         test_metadata_path = sys.argv[6]
         schema_output_path = sys.argv[7]
 
-        config = json.loads(source_config) if source_config else {}
-        
-        print(f'[INFO] Loading test images from: {test_source}')
-        print(f'[INFO] Test type: {test_type}')
-        print(f'[INFO] Samples: {num_samples}')
+        print('Starting test image loading...')
+        print('Test source: ' + test_source)
+        print('Source config: ' + source_config)
+        print('Num samples: ' + str(num_samples))
+        print('Test type: ' + test_type)
+
+        # Parse config
+        try:
+            config = json.loads(source_config) if source_config and source_config.strip() not in ['{}', ''] else {}
+        except json.JSONDecodeError as e:
+            print('WARN: Invalid source_config JSON: ' + str(e) + ', using empty config')
+            config = {}
 
         def load_cdn_test(source, config, num_samples, test_type):
-            cdn_url = source.replace('cdn://', '')
+            # Handle both cdn:// protocol and direct URLs
+            if source.startswith('cdn://'):
+                actual_url = source.replace('cdn://', '')
+            elif source.startswith(('http://', 'https://')):
+                actual_url = source
+            else:
+                raise ValueError('Unsupported test source: ' + source)
+                
             caption_strategy = config.get('caption_strategy', 'folder_based')
             
-            print(f'   Loading CDN test images: {cdn_url}')
+            print('Loading CDN test images: ' + actual_url)
             
-            # Download ZIP
-            decoded_url = unquote(cdn_url)
+            # Download ZIP with URL decoding
+            decoded_url = unquote(actual_url)
+            print('Decoded URL: ' + decoded_url)
+            
             headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(decoded_url, headers=headers, timeout=30)
+            response = requests.get(decoded_url, headers=headers, timeout=60)
             response.raise_for_status()
             
             zip_content = io.BytesIO(response.content)
             test_data = []
             
             with zipfile.ZipFile(zip_content, 'r') as zip_file:
-                image_files = [f for f in zip_file.namelist() 
-                             if any(f.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'])]
+                image_files = []
+                for file_path in zip_file.namelist():
+                    lower_path = file_path.lower()
+                    if any(lower_path.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp']):
+                        image_files.append(file_path)
+                
+                print('Found ' + str(len(image_files)) + ' image files in ZIP')
                 
                 # For testing, we might want a random subset
                 if test_type == 'holdout':
@@ -70,6 +94,15 @@ implementation:
                     try:
                         with zip_file.open(file_path) as image_file:
                             image_data = image_file.read()
+                            
+                            # Verify it's a valid image
+                            try:
+                                image = Image.open(io.BytesIO(image_data))
+                                image.verify()
+                            except Exception as e:
+                                print('Skipping invalid image ' + file_path + ': ' + str(e))
+                                continue
+                            
                             base64_image = base64.b64encode(image_data).decode('utf-8')
                             
                             # Generate ground truth caption
@@ -85,12 +118,12 @@ implementation:
                                 'caption_strategy': caption_strategy
                             })
                     except Exception as e:
-                        print(f'   [WARN] Skipping {file_path}: {e}')
+                        print('Skipping ' + file_path + ': ' + str(e))
                         continue
 
             metadata = {
                 'source_type': 'cdn_zip',
-                'cdn_url': cdn_url,
+                'cdn_url': actual_url,
                 'total_test_samples': len(test_data),
                 'has_ground_truth': True,
                 'caption_strategy': caption_strategy,
@@ -102,12 +135,22 @@ implementation:
         def load_hf_test(source, config, num_samples, test_type):
             dataset_name = source.replace('huggingface://', '')
             split = config.get('split', 'validation')
-            if split == 'auto':
-                split = 'test' if 'test' in load_dataset(dataset_name).keys() else 'validation'
             
-            print(f'   Loading HF test split: {split} from {dataset_name}')
+            print('Loading HF test split: ' + split + ' from ' + dataset_name)
             
-            dataset = load_dataset(dataset_name, split=split)
+            try:
+                dataset = load_dataset(dataset_name, split=split)
+            except:
+                # Try with default split
+                dataset = load_dataset(dataset_name)
+                if 'test' in dataset:
+                    split = 'test'
+                elif 'validation' in dataset:
+                    split = 'validation'
+                else:
+                    split = 'train'
+                dataset = dataset[split]
+            
             test_data = []
             
             for i in range(min(num_samples, len(dataset))):
@@ -127,7 +170,7 @@ implementation:
                         'split': split
                     })
                 except Exception as e:
-                    print(f'   [WARN] Skipping test sample {i}: {e}')
+                    print('Skipping test sample ' + str(i) + ': ' + str(e))
                     continue
 
             metadata = {
@@ -140,37 +183,21 @@ implementation:
             
             return test_data, metadata
 
-        def load_from_training_data(config, num_samples):
-            dataset_source = config.get('dataset_source')
-            # This would reuse your training data but take a holdout set
-            # Implementation depends on where training data is stored
-            test_data = []
-            metadata = {
-                'source_type': 'holdout_from_training',
-                'total_test_samples': len(test_data),
-                'has_ground_truth': True
-            }
-            return test_data, metadata
-
-        def auto_detect_test(source, config, num_samples, test_type):
-            if source.startswith('http') and source.endswith('.zip'):
-                return load_cdn_test(f'cdn://{source}', config, num_samples, test_type)
-            elif '/' in source and not source.startswith('http'):
-                return load_hf_test(f'huggingface://{source}', config, num_samples, test_type)
-            else:
-                raise ValueError(f'Could not auto-detect test source: {source}')
-
         def generate_ground_truth_caption(file_path, strategy):
             filename = os.path.splitext(os.path.basename(file_path))[0]
-            path_parts = file_path.split('/')
+            path_parts = [p for p in file_path.split('/') if p]
             
             if strategy == 'folder_based' and len(path_parts) > 1:
-                class_name = path_parts[-2]  # e.g., 'inputfield' or 'toggle'
-                return f'A {class_name} component in user interface'
+                class_name = path_parts[-2]
+                return 'A ' + class_name.replace('_', ' ')
             elif strategy == 'filename_based':
-                return f'An image showing {filename.replace(\"_\", \" \")}'
+                return 'An image of ' + filename.replace('_', ' ')
             else:
-                return f'UI component: {filename.replace(\"_\", \" \")}'
+                if len(path_parts) > 1:
+                    class_name = path_parts[-2]
+                    return 'A ' + class_name.replace('_', ' ') + ' showing ' + filename.replace('_', ' ')
+                else:
+                    return 'An image of ' + filename.replace('_', ' ')
 
         def image_to_base64(image):
             if isinstance(image, Image.Image):
@@ -201,15 +228,12 @@ implementation:
         # Route to appropriate loader
         if test_source.startswith('huggingface://'):
             test_data, metadata = load_hf_test(test_source, config, num_samples, test_type)
-        elif test_source.startswith('cdn://'):
+        elif test_source.startswith('cdn://') or test_source.startswith(('http://', 'https://')):
             test_data, metadata = load_cdn_test(test_source, config, num_samples, test_type)
-        elif test_source == 'reuse_training':
-            test_data, metadata = load_from_training_data(config, num_samples)
         else:
-            # Auto-detect
-            test_data, metadata = auto_detect_test(test_source, config, num_samples, test_type)
+            raise ValueError('Unsupported test source: ' + test_source)
 
-        # Save outputs
+        # Ensure output directories exist
         os.makedirs(os.path.dirname(test_images_path) or '.', exist_ok=True)
         with open(test_images_path, 'wb') as f:
             pickle.dump(test_data, f)
@@ -224,11 +248,13 @@ implementation:
             'test_samples_loaded': len(test_data),
             'has_ground_truth': metadata.get('has_ground_truth', False)
         }
+        
+        os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print(f'[SUCCESS] Loaded {len(test_data)} test images')
-        " "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+        print('Test image loading complete! Loaded ' + str(len(test_data)) + ' test images')
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
     args:
       - {inputValue: test_source}
       - {inputValue: source_config}
