@@ -1,4 +1,4 @@
-name: 2 Build Generic Image To Text Model
+name: Build Generic Image To Text Model
 description: Builds a generic image-to-text model suitable for any domain using nesy-factory components.
 inputs:
   - name: tokenizer_json
@@ -60,15 +60,52 @@ implementation:
         with open(vision_encoder_config_path, 'r') as f:
             vision_config = json.load(f)
 
-        # Load tokenizer to get vocab info
+        # Load tokenizer to get vocab info - FIXED: Handle directory input
+        vocab_size = 50257  # Default fallback
         try:
             from tokenizers import Tokenizer
-            tok = Tokenizer.from_file(tokenizer_json_path)
-            vocab_size = tok.get_vocab_size()
-            print('Loaded tokenizer with vocab size: ' + str(vocab_size))
+            
+            # Check if tokenizer_json_path is a directory or file
+            if os.path.isdir(tokenizer_json_path):
+                print('Tokenizer path is a directory, looking for tokenizer files...')
+                # Look for common tokenizer files in the directory
+                possible_files = [
+                    'tokenizer.json',
+                    'vocab.json',
+                    'merges.txt',
+                    'tokenizer_config.json'
+                ]
+                
+                tokenizer_file_found = None
+                for file in possible_files:
+                    full_path = os.path.join(tokenizer_json_path, file)
+                    if os.path.isfile(full_path):
+                        tokenizer_file_found = full_path
+                        print('Found tokenizer file: ' + file)
+                        break
+                
+                if tokenizer_file_found:
+                    # Try to load from the specific file
+                    tok = Tokenizer.from_file(tokenizer_file_found)
+                    vocab_size = tok.get_vocab_size()
+                    print('Loaded tokenizer from directory with vocab size: ' + str(vocab_size))
+                else:
+                    # Try to load the entire directory as a tokenizer
+                    try:
+                        from transformers import AutoTokenizer
+                        hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer_json_path)
+                        vocab_size = hf_tokenizer.vocab_size
+                        print('Loaded Hugging Face tokenizer from directory with vocab size: ' + str(vocab_size))
+                    except Exception as e:
+                        print('WARN: Could not load tokenizer from directory: ' + str(e))
+            else:
+                # It's a direct file path
+                tok = Tokenizer.from_file(tokenizer_json_path)
+                vocab_size = tok.get_vocab_size()
+                print('Loaded tokenizer from file with vocab size: ' + str(vocab_size))
+                
         except Exception as e:
             print('WARN: Could not load tokenizer, using default vocab size: ' + str(e))
-            vocab_size = 50257  # Default GPT-2 vocab size
 
         # Domain-specific configurations
         domain_configs = {
@@ -166,37 +203,37 @@ implementation:
             fusion_code = fusion_implementations.get(config['model_architecture'], fusion_implementations['cross_attention'])
             
             return '''import torch
-                      import torch.nn as nn
-                      from transformers import AutoModelForCausalLM
-                      from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+            import torch.nn as nn
+            from transformers import AutoModelForCausalLM
+            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
 
-                      class GenericImageToTextModel(nn.Module):
+            class GenericImageToTextModel(nn.Module):
 
-                      def __init__(self, config):
-                      super().__init__()
-                      self.config = config
+                def __init__(self, config):
+                    super().__init__()
+                    self.config = config
 
-                      # Vision encoder - processes any type of image
-                      self.vision_encoder = CLIPVisionEncoder(
-                      model_name=config['vision_encoder']['model_name'],
-                      projection_dim=config['vision_encoder'].get('projection_dim', 512),
-                      unfreeze_layers=config['vision_encoder'].get('unfreeze_layers', 0)
-                      )
+                    # Vision encoder - processes any type of image
+                    self.vision_encoder = CLIPVisionEncoder(
+                        model_name=config['vision_encoder']['model_name'],
+                        projection_dim=config['vision_encoder'].get('projection_dim', 512),
+                        unfreeze_layers=config['vision_encoder'].get('unfreeze_layers', 0)
+                    )
 
-                      # Language model - generates descriptions
-                      self.language_model = AutoModelForCausalLM.from_pretrained(
-                      config['language_model_name']
-                      )
+                    # Language model - generates descriptions
+                    self.language_model = AutoModelForCausalLM.from_pretrained(
+                        config['language_model_name']
+                    )
 
-                      # Project vision features to language model space
-                      vision_dim = config['vision_encoder'].get('projection_dim', 512)
-                      text_dim = self.language_model.config.hidden_size
+                    # Project vision features to language model space
+                    vision_dim = config['vision_encoder'].get('projection_dim', 512)
+                    text_dim = self.language_model.config.hidden_size
 
-                      self.vision_proj = nn.Linear(vision_dim, text_dim)
-                      self.layer_norm = nn.LayerNorm(text_dim)
+                    self.vision_proj = nn.Linear(vision_dim, text_dim)
+                    self.layer_norm = nn.LayerNorm(text_dim)
 
-          # Fusion module
-                  ''' + fusion_code + '''
+                    # Fusion module
+            ''' + fusion_code + '''
 
             def forward(self, images, input_ids=None, attention_mask=None, labels=None):
                 # Extract visual features from any image type
@@ -280,7 +317,8 @@ implementation:
             'domain': domain_specialization,
             'architecture': model_architecture,
             'purpose': 'universal_image_captioning',
-            'config': model_config
+            'config': model_config,
+            'vocab_size': vocab_size
         }
         
         os.makedirs(os.path.dirname(model_weights_path) or '.', exist_ok=True)
@@ -293,6 +331,7 @@ implementation:
             'output_type': 'descriptive_text',
             'architecture': model_architecture,
             'domain_specialization': domain_specialization,
+            'vocab_size': vocab_size,
             'flexibility': 'high',
             'supported_applications': [
                 'object_description', 'scene_captioning', 'document_analysis',
@@ -309,6 +348,7 @@ implementation:
         print('Model config saved to: ' + model_config_path)
         print('Model code saved to: ' + model_py_path)
         print('Initial weights saved to: ' + model_weights_path)
+        print('Final vocab size used: ' + str(vocab_size))
         " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
       - {inputPath: tokenizer_json}
