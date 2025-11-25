@@ -1,4 +1,4 @@
-name: Image Captioning Tokenizer
+name: 2 Image Captioning Tokenizer
 description: Initializes a Hugging Face tokenizer for generic image captioning using nesy-factory's HFTokenizer.
 inputs:
   - name: tokenizer_name
@@ -84,13 +84,21 @@ implementation:
                     all_captions.append(item['caption'])
                 if 'alternative_captions' in item:
                     all_captions.extend(item['alternative_captions'])
+                # Extract class name from different possible fields
                 if 'class_name' in item:
                     caption_classes.append(item['class_name'])
                 elif 'label' in item:
                     caption_classes.append(item['label'])
+                # Try to extract from filename or path for folder-based datasets
+                elif 'filename' in item:
+                    filename = item['filename']
+                    path_parts = [p for p in filename.split('/') if p]
+                    if len(path_parts) > 1:
+                        caption_classes.append(path_parts[-2])  # Parent folder as class
             
             print('Analyzed ' + str(len(all_captions)) + ' captions for tokenizer')
-            print('Found ' + str(len(set(caption_classes))) + ' unique caption classes')
+            unique_classes = list(set(caption_classes)) if caption_classes else ['general']
+            print('Found ' + str(len(unique_classes)) + ' unique caption classes: ' + str(unique_classes))
             print('Sample captions: ' + str(all_captions[:3]))
             
         except Exception as e:
@@ -98,11 +106,13 @@ implementation:
             all_captions = ['sample caption for initialization']
             caption_classes = ['general']
 
-        # Initialize tokenizer
+        # Initialize tokenizer with FIXED parameters
         tokenizer = HFTokenizer()
+        
+        # Use minimal parameters to avoid conflicts
         report = tokenizer.run(
-            tokenizer_name=tokenizer_name,
-            add_special_tokens=True
+            tokenizer_name=tokenizer_name
+            # Removed add_special_tokens parameter that was causing conflict
         )
 
         # Ensure output directories exist
@@ -110,11 +120,13 @@ implementation:
         tokenizer.save(tokenizer_json_path)
 
         # Add caption analysis to report
+        unique_classes = list(set(caption_classes)) if caption_classes else ['general']
         report['caption_analysis'] = {
             'total_captions': len(all_captions),
             'unique_captions': len(set(all_captions)),
             'sample_captions': all_captions[:5],
-            'caption_classes': list(set(caption_classes)) if caption_classes else ['general']
+            'caption_classes': unique_classes,
+            'class_distribution': {cls: caption_classes.count(cls) for cls in unique_classes}
         }
 
         # Save tokenizer report
@@ -127,7 +139,8 @@ implementation:
             'tokenizer_name': tokenizer_name,
             'vocab_size': report.get('vocab_size'),
             'model_max_length': report.get('model_max_length'),
-            'caption_classes': report['caption_analysis']['caption_classes'],
+            'caption_classes': unique_classes,
+            'total_captions_analyzed': len(all_captions),
             'purpose': 'generic_image_captioning',
             'status': 'success'
         }
@@ -139,6 +152,7 @@ implementation:
         print('Tokenizer initialization complete!')
         print('Tokenizer saved to: ' + tokenizer_json_path)
         print('Vocabulary size: ' + str(report.get('vocab_size', 'unknown')))
+        print('Model max length: ' + str(report.get('model_max_length', 'unknown')))
         " "$0" "$1" "$2" "$3" "$4"
     args:
       - {inputValue: tokenizer_name}
