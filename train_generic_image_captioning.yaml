@@ -6,7 +6,7 @@ inputs:
   - name: vision_encoder_config
     type: Data
   - name: model_config
-    type: String
+    type: Data
   - name: model_weights
     type: Model
   - name: model_py
@@ -15,6 +15,10 @@ inputs:
     type: Dataset
   - name: dataset_metadata
     type: DatasetInfo
+  - name: training_parameters
+    type: String
+    default: "{}"
+    description: 'JSON string with additional training parameters (learning_rate, num_epochs, etc.)'
 outputs:
   - name: trained_model
     type: Model
@@ -40,59 +44,42 @@ implementation:
         # Get arguments from command line
         tokenizer_json_path = sys.argv[1]
         vision_encoder_config_path = sys.argv[2]
-        model_config_str = sys.argv[3]  # Now a JSON string
+        model_config_path = sys.argv[3]  # File path from parent brick
         model_weights_path = sys.argv[4]
         model_py_path = sys.argv[5]
         caption_dataset_path = sys.argv[6]
         dataset_metadata_path = sys.argv[7]
-        trained_model_path = sys.argv[8]
-        training_report_path = sys.argv[9]
-        loss_curves_path = sys.argv[10]
-        schema_output_path = sys.argv[11]
+        training_params_str = sys.argv[8]  # JSON string from user
+        trained_model_path = sys.argv[9]
+        training_report_path = sys.argv[10]
+        loss_curves_path = sys.argv[11]
+        schema_output_path = sys.argv[12]
 
         print('Starting generic image captioning training...')
 
-        # Parse model config from JSON string with escape sequence handling
-        try:
-            # First, handle any escape sequences by loading the JSON
-            model_config = json.loads(model_config_str)
-            print('Successfully parsed model config from JSON string')
-        except json.JSONDecodeError as e:
-            print('ERROR: Failed to parse model config JSON: ' + str(e))
-            print('Raw model config string: ' + model_config_str)
-            
-            # Try to handle common escape sequence issues
-            try:
-                # Replace common escape sequences
-                cleaned_str = model_config_str.replace('\\\"', '\"').replace('\\\\', '\\')
-                model_config = json.loads(cleaned_str)
-                print('Successfully parsed after cleaning escape sequences')
-            except:
-                # Fallback to default config
-                print('Using default model config due to parsing errors')
-                model_config = {
-                    'training_parameters': {
-                        'learning_rate': 5e-5,
-                        'num_epochs': 10,
-                        'batch_size': 8,
-                        'max_train_samples': 1000,
-                        'gradient_accumulation_steps': 1,
-                        'validation_split': 0.1
-                    },
-                    'language_model_name': 'microsoft/git-base'
-                }
+        # Load model config from parent brick (file path)
+        with open(model_config_path, 'r') as f:
+            model_config = json.load(f)
+        print('Loaded model config from parent brick')
 
-        # Extract training parameters from model config with defaults
-        training_params = model_config.get('training_parameters', {})
-        learning_rate = training_params.get('learning_rate', 5e-5)
-        num_epochs = training_params.get('num_epochs', 10)
-        batch_size = training_params.get('batch_size', 8)
-        max_train_samples = training_params.get('max_train_samples', 1000)
-        gradient_accumulation_steps = training_params.get('gradient_accumulation_steps', 1)
-        validation_split = training_params.get('validation_split', 0.1)
+        # Parse training parameters from JSON string with escape sequence handling
+        try:
+            training_params = json.loads(training_params_str) if training_params_str and training_params_str.strip() not in ['{}', ''] else {}
+            print('Successfully parsed training parameters from JSON string')
+        except json.JSONDecodeError as e:
+            print('WARN: Invalid training_parameters JSON: ' + str(e) + ', using empty training params')
+            training_params = {}
+
+        # Extract training parameters with defaults (user params override model config)
+        learning_rate = training_params.get('learning_rate', model_config.get('training_parameters', {}).get('learning_rate', 5e-5))
+        num_epochs = training_params.get('num_epochs', model_config.get('training_parameters', {}).get('num_epochs', 10))
+        batch_size = training_params.get('batch_size', model_config.get('training_parameters', {}).get('batch_size', 8))
+        max_train_samples = training_params.get('max_train_samples', model_config.get('training_parameters', {}).get('max_train_samples', 1000))
+        gradient_accumulation_steps = training_params.get('gradient_accumulation_steps', model_config.get('training_parameters', {}).get('gradient_accumulation_steps', 1))
+        validation_split = training_params.get('validation_split', model_config.get('training_parameters', {}).get('validation_split', 0.1))
         language_model_name = model_config.get('language_model_name', 'microsoft/git-base')
 
-        print('Training parameters from model config:')
+        print('Final training parameters:')
         print('Language model: ' + language_model_name)
         print('Learning rate: ' + str(learning_rate))
         print('Num epochs: ' + str(num_epochs))
@@ -138,7 +125,7 @@ implementation:
         # Initialize trainer
         trainer = HFImageCaptioningTrainer()
 
-        # Run training with parameters from model config
+        # Run training with combined parameters
         results = trainer.run(
             vision_encoder_config=vision_config,
             language_model_name=language_model_name,
@@ -167,6 +154,7 @@ implementation:
                 'validation_split': validation_split
             },
             'model_config_used': model_config,
+            'user_training_params': training_params,
             'domain_adaptability': 'high',
             'supported_image_types': dataset_meta.get('detected_classes', ['generic'])
         }
@@ -198,6 +186,7 @@ implementation:
                 'domain_adaptability': 'high'
             },
             'model_config_reference': model_config,
+            'user_parameters_applied': training_params,
             'generic_capabilities': [
                 'cross_domain_captioning',
                 'multiple_image_types',
@@ -213,15 +202,16 @@ implementation:
         print('Generic image captioning training completed!')
         print('Trained model saved to: ' + trained_model_path)
         print('Training report saved to: ' + training_report_path)
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10"
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11"
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: vision_encoder_config}
-      - {inputValue: model_config}
+      - {inputPath: model_config}
       - {inputPath: model_weights}
       - {inputPath: model_py}
       - {inputPath: caption_dataset}
       - {inputPath: dataset_metadata}
+      - {inputValue: training_parameters}
       - {outputPath: trained_model}
       - {outputPath: training_report}
       - {outputPath: loss_curves}
