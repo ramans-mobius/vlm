@@ -166,100 +166,100 @@ implementation:
             fusion_code = fusion_implementations.get(config['model_architecture'], fusion_implementations['cross_attention'])
             
             return '''import torch
-import torch.nn as nn
-from transformers import AutoModelForCausalLM
-from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
-
-class GenericImageToTextModel(nn.Module):
-    
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        
-        # Vision encoder - processes any type of image
-        self.vision_encoder = CLIPVisionEncoder(
-            model_name=config['vision_encoder']['model_name'],
-            projection_dim=config['vision_encoder'].get('projection_dim', 512),
-            unfreeze_layers=config['vision_encoder'].get('unfreeze_layers', 0)
-        )
-        
-        # Language model - generates descriptions
-        self.language_model = AutoModelForCausalLM.from_pretrained(
-            config['language_model_name']
-        )
-        
-        # Project vision features to language model space
-        vision_dim = config['vision_encoder'].get('projection_dim', 512)
-        text_dim = self.language_model.config.hidden_size
-        
-        self.vision_proj = nn.Linear(vision_dim, text_dim)
-        self.layer_norm = nn.LayerNorm(text_dim)
-        
-        # Fusion module
-''' + fusion_code + '''
-    
-    def forward(self, images, input_ids=None, attention_mask=None, labels=None):
-        # Extract visual features from any image type
-        visual_features = self.vision_encoder.run(images)
-        visual_features = self.vision_proj(visual_features)
-        visual_features = visual_features.unsqueeze(1)  # [batch_size, 1, text_dim]
-        
-        if input_ids is not None:
-            # Training mode
-            text_embeddings = self.language_model.get_input_embeddings()(input_ids)
-            fused_embeddings = self.fuse_features(text_embeddings, visual_features)
+            import torch.nn as nn
+            from transformers import AutoModelForCausalLM
+            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
             
-            outputs = self.language_model(
-                inputs_embeds=fused_embeddings,
-                attention_mask=attention_mask,
-                labels=labels
-            )
-            return outputs
-        else:
-            # Inference mode
-            return visual_features
-    
-    def generate(self, images, tokenizer, max_length=None, temperature=None, top_k=50):
-        self.eval()
-        
-        max_length = max_length or self.config['max_caption_length']
-        temperature = temperature or self.config['default_temperature']
-        
-        with torch.no_grad():
-            visual_features = self.vision_encoder.run(images)
-            visual_features = self.vision_proj(visual_features)
-            visual_features = visual_features.unsqueeze(1)
+            class GenericImageToTextModel(nn.Module):
+                
+                def __init__(self, config):
+                    super().__init__()
+                    self.config = config
+                    
+                    # Vision encoder - processes any type of image
+                    self.vision_encoder = CLIPVisionEncoder(
+                        model_name=config['vision_encoder']['model_name'],
+                        projection_dim=config['vision_encoder'].get('projection_dim', 512),
+                        unfreeze_layers=config['vision_encoder'].get('unfreeze_layers', 0)
+                    )
+                    
+                    # Language model - generates descriptions
+                    self.language_model = AutoModelForCausalLM.from_pretrained(
+                        config['language_model_name']
+                    )
+                    
+                    # Project vision features to language model space
+                    vision_dim = config['vision_encoder'].get('projection_dim', 512)
+                    text_dim = self.language_model.config.hidden_size
+                    
+                    self.vision_proj = nn.Linear(vision_dim, text_dim)
+                    self.layer_norm = nn.LayerNorm(text_dim)
+                    
+                    # Fusion module
+            ''' + fusion_code + '''
             
-            batch_size = visual_features.shape[0]
-            device = visual_features.device
+            def forward(self, images, input_ids=None, attention_mask=None, labels=None):
+                # Extract visual features from any image type
+                visual_features = self.vision_encoder.run(images)
+                visual_features = self.vision_proj(visual_features)
+                visual_features = visual_features.unsqueeze(1)  # [batch_size, 1, text_dim]
+                
+                if input_ids is not None:
+                    # Training mode
+                    text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+                    fused_embeddings = self.fuse_features(text_embeddings, visual_features)
+                    
+                    outputs = self.language_model(
+                        inputs_embeds=fused_embeddings,
+                        attention_mask=attention_mask,
+                        labels=labels
+                    )
+                    return outputs
+                else:
+                    # Inference mode
+                    return visual_features
             
-            input_ids = torch.tensor([[tokenizer.bos_token_id]] * batch_size).to(device)
-            generated_ids = input_ids.clone()
-            
-            for step in range(max_length):
-                text_embeddings = self.language_model.get_input_embeddings()(input_ids)
-                fused_embeddings = self.fuse_features(text_embeddings, visual_features)
+            def generate(self, images, tokenizer, max_length=None, temperature=None, top_k=50):
+                self.eval()
                 
-                outputs = self.language_model(inputs_embeds=fused_embeddings)
-                next_token_logits = outputs.logits[:, -1, :]
+                max_length = max_length or self.config['max_caption_length']
+                temperature = temperature or self.config['default_temperature']
                 
-                next_token_logits = next_token_logits / temperature
-                
-                if top_k is not None:
-                    indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
-                    next_token_logits[indices_to_remove] = -float('inf')
-                
-                probs = torch.softmax(next_token_logits, dim=-1)
-                next_tokens = torch.multinomial(probs, num_samples=1)
-                
-                generated_ids = torch.cat([generated_ids, next_tokens], dim=1)
-                input_ids = next_tokens
-                
-                if (next_tokens == tokenizer.eos_token_id).all():
-                    break
-            
-            return generated_ids
-'''
+                with torch.no_grad():
+                    visual_features = self.vision_encoder.run(images)
+                    visual_features = self.vision_proj(visual_features)
+                    visual_features = visual_features.unsqueeze(1)
+                    
+                    batch_size = visual_features.shape[0]
+                    device = visual_features.device
+                    
+                    input_ids = torch.tensor([[tokenizer.bos_token_id]] * batch_size).to(device)
+                    generated_ids = input_ids.clone()
+                    
+                    for step in range(max_length):
+                        text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+                        fused_embeddings = self.fuse_features(text_embeddings, visual_features)
+                        
+                        outputs = self.language_model(inputs_embeds=fused_embeddings)
+                        next_token_logits = outputs.logits[:, -1, :]
+                        
+                        next_token_logits = next_token_logits / temperature
+                        
+                        if top_k is not None:
+                            indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
+                            next_token_logits[indices_to_remove] = -float('inf')
+                        
+                        probs = torch.softmax(next_token_logits, dim=-1)
+                        next_tokens = torch.multinomial(probs, num_samples=1)
+                        
+                        generated_ids = torch.cat([generated_ids, next_tokens], dim=1)
+                        input_ids = next_tokens
+                        
+                        if (next_tokens == tokenizer.eos_token_id).all():
+                            break
+                    
+                    return generated_ids
+        '''
 
         model_code = generate_model_code(model_config)
 
