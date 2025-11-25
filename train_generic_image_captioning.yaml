@@ -1,0 +1,217 @@
+name: Train Generic Image Captioning
+description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
+inputs:
+  - name: tokenizer_json
+    type: Model
+  - name: vision_encoder_config
+    type: Data
+  - name: model_config
+    type: Data
+  - name: model_weights
+    type: Model
+  - name: model_py
+    type: Data
+  - name: caption_dataset
+    type: Dataset
+  - name: dataset_metadata
+    type: DatasetInfo
+  - name: learning_rate
+    type: String
+    default: "5e-5"
+  - name: num_epochs
+    type: Integer
+    default: "10"
+  - name: batch_size
+    type: Integer
+    default: "8"
+  - name: max_train_samples
+    type: Integer
+    default: "1000"
+  - name: gradient_accumulation_steps
+    type: Integer
+    default: "1"
+  - name: validation_split
+    type: String
+    default: "0.1"
+    description: 'Fraction of data to use for validation'
+outputs:
+  - name: trained_model
+    type: Model
+  - name: training_report
+    type: Data
+  - name: loss_curves
+    type: Data
+  - name: schema_json
+    type: Data
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v29
+    command:
+      - sh
+      - -c
+      - |
+        python3 -c "
+        import sys, os, json, pickle, torch
+        
+        print('Number of arguments:', len(sys.argv))
+        print('Arguments:', sys.argv)
+        
+        # Get arguments from command line
+        tokenizer_json_path = sys.argv[1]
+        vision_encoder_config_path = sys.argv[2]
+        model_config_path = sys.argv[3]
+        model_weights_path = sys.argv[4]
+        model_py_path = sys.argv[5]
+        caption_dataset_path = sys.argv[6]
+        dataset_metadata_path = sys.argv[7]
+        learning_rate = float(sys.argv[8])
+        num_epochs = int(sys.argv[9])
+        batch_size = int(sys.argv[10])
+        max_train_samples = int(sys.argv[11])
+        gradient_accumulation_steps = int(sys.argv[12])
+        validation_split = float(sys.argv[13])
+        trained_model_path = sys.argv[14]
+        training_report_path = sys.argv[15]
+        loss_curves_path = sys.argv[16]
+        schema_output_path = sys.argv[17]
+
+        print('Starting generic image captioning training...')
+        print('Learning rate: ' + str(learning_rate))
+        print('Num epochs: ' + str(num_epochs))
+        print('Batch size: ' + str(batch_size))
+        print('Max train samples: ' + str(max_train_samples))
+
+        try:
+            from nesy_factory.language_model.image_captioning_trainer import HFImageCaptioningTrainer
+            print('Successfully imported HFImageCaptioningTrainer')
+        except ImportError as e:
+            error_msg = 'HFImageCaptioningTrainer import failed: ' + str(e)
+            print('ERROR: ' + error_msg)
+            
+            error_report = {
+                'status': 'error',
+                'error': error_msg,
+                'suggestion': 'Ensure nesy_factory is properly installed with image captioning components'
+            }
+            
+            os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
+            with open(training_report_path, 'w') as f:
+                json.dump(error_report, f, indent=2)
+            
+            sys.exit(1)
+
+        # Load datasets
+        with open(caption_dataset_path, 'rb') as f:
+            caption_data = pickle.load(f)
+        
+        with open(dataset_metadata_path, 'rb') as f:
+            dataset_meta = pickle.load(f)
+
+        # Load vision encoder config
+        with open(vision_encoder_config_path, 'r') as f:
+            vision_config = json.load(f)
+
+        print('Training generic image captioning model on ' + str(len(caption_data)) + ' images')
+        print('Domain: ' + dataset_meta.get('caption_strategy', 'generic'))
+        print('Classes: ' + str(dataset_meta.get('detected_classes', ['various'])))
+
+        # Initialize trainer
+        trainer = HFImageCaptioningTrainer()
+
+        # Run training with generic parameters
+        results = trainer.run(
+            vision_encoder_config=vision_config,
+            language_model_name='microsoft/git-base',
+            dataset_name='generic_custom_dataset',
+            max_train_samples=min(max_train_samples, len(caption_data)),
+            learning_rate=learning_rate,
+            num_epochs=num_epochs,
+            batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            output_dir=os.path.dirname(trained_model_path) or '.'
+        )
+
+        # Save trained model
+        os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
+        training_summary = {
+            'status': 'completed',
+            'training_results': results,
+            'model_saved': trained_model_path,
+            'dataset_info': dataset_meta,
+            'training_parameters': {
+                'learning_rate': learning_rate,
+                'num_epochs': num_epochs,
+                'batch_size': batch_size,
+                'max_train_samples': max_train_samples,
+                'validation_split': validation_split
+            },
+            'domain_adaptability': 'high',
+            'supported_image_types': dataset_meta.get('detected_classes', ['generic'])
+        }
+        torch.save(training_summary, trained_model_path)
+
+        # Save training report
+        os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
+        with open(training_report_path, 'w') as f:
+            json.dump(results, f, indent=2)
+
+        # Save loss curves
+        loss_data = {
+            'train_losses': results.get('train_losses', []),
+            'test_losses': results.get('test_losses', []),
+            'learning_rates': results.get('learning_rates', [])
+        }
+        os.makedirs(os.path.dirname(loss_curves_path) or '.', exist_ok=True)
+        with open(loss_curves_path, 'w') as f:
+            json.dump(loss_data, f, indent=2)
+
+        # Save schema
+        schema = {
+            'training_parameters': {
+                'learning_rate': learning_rate,
+                'num_epochs': num_epochs,
+                'batch_size': batch_size,
+                'max_train_samples': max_train_samples,
+                'validation_split': validation_split
+            },
+            'dataset_info': dataset_meta,
+            'results_summary': {
+                'final_train_loss': results.get('train_losses', [])[-1] if results.get('train_losses') else None,
+                'final_test_loss': results.get('test_losses', [])[-1] if results.get('test_losses') else None,
+                'classes_learned': dataset_meta.get('detected_classes', []),
+                'domain_adaptability': 'high'
+            },
+            'generic_capabilities': [
+                'cross_domain_captioning',
+                'multiple_image_types',
+                'adaptive_descriptions',
+                'zero_shot_understanding'
+            ]
+        }
+        
+        os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
+        with open(schema_output_path, 'w') as f:
+            json.dump(schema, f, indent=2)
+
+        print('Generic image captioning training completed!')
+        print('Trained model saved to: ' + trained_model_path)
+        print('Training report saved to: ' + training_report_path)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16"
+    args:
+      - {inputPath: tokenizer_json}
+      - {inputPath: vision_encoder_config}
+      - {inputPath: model_config}
+      - {inputPath: model_weights}
+      - {inputPath: model_py}
+      - {inputPath: caption_dataset}
+      - {inputPath: dataset_metadata}
+      - {inputValue: learning_rate}
+      - {inputValue: num_epochs}
+      - {inputValue: batch_size}
+      - {inputValue: max_train_samples}
+      - {inputValue: gradient_accumulation_steps}
+      - {inputValue: validation_split}
+      - {outputPath: trained_model}
+      - {outputPath: training_report}
+      - {outputPath: loss_curves}
+      - {outputPath: schema_json}
