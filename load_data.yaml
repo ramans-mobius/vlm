@@ -1,4 +1,4 @@
-name: Load Data 
+name: 2 Load Data 
 description: Universal data loader for image captioning - supports Hugging Face, CDN ZIP, and custom datasets.
 inputs:
   - {name: data_source, type: String, description: 'Dataset source: huggingface://dataset-name, cdn://url, or custom://type'}
@@ -27,7 +27,7 @@ implementation:
         print('Arguments:', sys.argv)
         
         # Get args directly from command line
-        data_source = sys.argv[1]
+        data_source = sys.argv[1].strip()
         data_config = sys.argv[2]
         max_samples = int(sys.argv[3])
         caption_strategy = sys.argv[4]
@@ -51,15 +51,18 @@ implementation:
         def load_cdn_zip_dataset(url, config, max_samples, strategy):
             print('Loading CDN ZIP from: ' + url)
             
-            # Download and extract
+            # URL decode the URL to handle %24 -> $ etc.
             decoded_url = unquote(url)
+            print('Decoded URL: ' + decoded_url)
+            
             headers = {'User-Agent': 'Mozilla/5.0'}
             
             try:
                 response = requests.get(decoded_url, headers=headers, timeout=60)
                 response.raise_for_status()
+                print('Successfully downloaded ZIP file, size: ' + str(len(response.content)) + ' bytes')
             except requests.RequestException as e:
-                raise Exception('Failed to download from ' + url + ': ' + str(e))
+                raise Exception('Failed to download from ' + decoded_url + ': ' + str(e))
             
             zip_content = io.BytesIO(response.content)
             caption_data = []
@@ -88,6 +91,8 @@ implementation:
                                 try:
                                     image = Image.open(io.BytesIO(image_data))
                                     image.verify()
+                                    # Reopen for actual processing since verify() closes the image
+                                    image = Image.open(io.BytesIO(image_data))
                                 except Exception as e:
                                     print('Skipping invalid image ' + file_path + ': ' + str(e))
                                     continue
@@ -139,22 +144,28 @@ implementation:
                     clean_filename = filename.replace('_', ' ')
                     return 'An image of ' + clean_filename
 
-        # Main loading logic
+        # Main loading logic - FLEXIBLE PROTOCOL HANDLING
+        # Handle both cdn:// protocol and direct URLs
         if data_source.startswith('cdn://'):
+            # Remove cdn:// prefix
             actual_url = data_source.replace('cdn://', '')
-            dataset = load_cdn_zip_dataset(actual_url, config, max_samples, caption_strategy)
-            
-            metadata = {
-                'source_type': 'cdn_zip',
-                'cdn_url': actual_url,
-                'total_samples': len(dataset),
-                'caption_strategy': caption_strategy,
-                'data_quality': 'medium',
-                'config_used': config
-            }
-            
+        elif data_source.startswith(('http://', 'https://')):
+            # Direct URL provided
+            actual_url = data_source
         else:
             raise ValueError('Unsupported data source protocol: ' + data_source)
+
+        # Load the dataset
+        dataset = load_cdn_zip_dataset(actual_url, config, max_samples, caption_strategy)
+        
+        metadata = {
+            'source_type': 'cdn_zip',
+            'cdn_url': actual_url,
+            'total_samples': len(dataset),
+            'caption_strategy': caption_strategy,
+            'data_quality': 'medium',
+            'config_used': config
+        }
 
         # Ensure output directories exist
         os.makedirs(os.path.dirname(caption_dataset_path) or '.', exist_ok=True)
