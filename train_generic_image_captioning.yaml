@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning
+name: ggggggggg Train Generic Image Captioning
 description: Image captioning training with compatible library versions and proper file handling
 inputs:
   - name: tokenizer_json
@@ -43,21 +43,21 @@ implementation:
         loss_curves_path = sys.argv[7]
         schema_output_path = sys.argv[8]
         
-        print('🚀 Starting enhanced training pipeline...')
+        print('Starting enhanced training pipeline...')
         print('Input paths:', tokenizer_json_path, vision_encoder_config_path, caption_dataset_path)
         
         # Handle vision encoder config - it might be pickle or JSON
         try:
             with open(vision_encoder_config_path, 'r') as f:
                 vision_config = json.load(f)
-            print('✅ Loaded vision config from JSON')
+            print('Loaded vision config from JSON')
         except (UnicodeDecodeError, json.JSONDecodeError):
             try:
                 with open(vision_encoder_config_path, 'rb') as f:
                     vision_config = pickle.load(f)
-                print('✅ Loaded vision config from pickle')
+                print('Loaded vision config from pickle')
             except Exception as e:
-                print('⚠️ Failed to load vision config, using defaults:', e)
+                print('Failed to load vision config, using defaults:', e)
                 vision_config = {
                     'model_name': 'openai/clip-vit-base-patch32',
                     'projection_dim': 512,
@@ -68,9 +68,9 @@ implementation:
         try:
             with open(caption_dataset_path, 'rb') as f:
                 caption_data = pickle.load(f)
-            print(f'✅ Successfully loaded {len(caption_data)} caption samples')
+            print('Successfully loaded', len(caption_data), 'caption samples')
         except Exception as e:
-            print('❌ Error loading caption dataset:', e)
+            print('Error loading caption dataset:', e)
             caption_data = []
         
         # Parse training parameters
@@ -80,19 +80,19 @@ implementation:
         batch_size = training_params.get('batch_size', 8)
         max_length = training_params.get('max_length', 128)
         
-        print('📊 Training config:')
-        print(f'   Epochs: {num_epochs}')
-        print(f'   Learning rate: {learning_rate}')
-        print(f'   Batch size: {batch_size}')
-        print(f'   Max length: {max_length}')
-        print(f'   Samples: {len(caption_data)}')
+        print('Training config:')
+        print('   Epochs:', num_epochs)
+        print('   Learning rate:', learning_rate)
+        print('   Batch size:', batch_size)
+        print('   Max length:', max_length)
+        print('   Samples:', len(caption_data))
         
         try:
             import torch
             import torch.nn as nn
-            print('✅ PyTorch version:', torch.__version__)
+            print('PyTorch version:', torch.__version__)
             import numpy as np
-            print('✅ NumPy version:', np.__version__)
+            print('NumPy version:', np.__version__)
             
             from transformers import AutoModelForCausalLM, AutoTokenizer
             from PIL import Image
@@ -100,9 +100,9 @@ implementation:
             # Import nesy-factory components
             try:
                 from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
-                print('✅ Successfully imported CLIPVisionEncoder')
+                print('Successfully imported CLIPVisionEncoder')
             except ImportError as e:
-                print('❌ Failed to import CLIPVisionEncoder:', e)
+                print('Failed to import CLIPVisionEncoder:', e)
                 # Create a fallback vision encoder
                 class FallbackVisionEncoder:
                     def __init__(self, model_name='openai/clip-vit-base-patch32', projection_dim=512):
@@ -122,7 +122,7 @@ implementation:
                 CLIPVisionEncoder = FallbackVisionEncoder
             
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            print(f'🎯 Using device: {device}')
+            print('Using device:', device)
             
             # Initialize vision encoder
             vision_encoder = CLIPVisionEncoder(
@@ -131,27 +131,27 @@ implementation:
             )
             if hasattr(vision_encoder, 'model'):
                 vision_encoder.model = vision_encoder.model.to(device)
-            print('✅ Vision encoder initialized')
+            print('Vision encoder initialized')
             
             # Initialize tokenizer
             try:
                 # Check if tokenizer path is a directory
                 if os.path.isdir(tokenizer_json_path):
                     tokenizer = AutoTokenizer.from_pretrained(tokenizer_json_path)
-                    print('✅ Loaded tokenizer from directory')
+                    print('Loaded tokenizer from directory')
                 else:
                     # Try to load from specific file
                     tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
-                    print('✅ Loaded fallback tokenizer')
+                    print('Loaded fallback tokenizer')
             except Exception as e:
-                print('❌ Tokenizer loading failed, using fallback:', e)
+                print('Tokenizer loading failed, using fallback:', e)
                 tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
                 tokenizer.add_special_tokens({'pad_token': '[PAD]'})
             
             # Initialize language model
             language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
             language_model = language_model.to(device)
-            print('✅ Language model initialized')
+            print('Language model initialized')
             
             # Setup optimizer
             optimizer = torch.optim.AdamW(
@@ -161,7 +161,7 @@ implementation:
             
             train_losses = []
             
-            print('🎯 Starting training loop...')
+            print('Starting training loop...')
             
             # Training loop
             for epoch in range(num_epochs):
@@ -239,21 +239,21 @@ implementation:
                             # Print progress every 10 samples
                             if processed % 10 == 0:
                                 current_loss = batch_loss / 10
-                                print(f'   Epoch {epoch+1}, Samples {processed}: loss = {current_loss:.4f}')
+                                print('Epoch', epoch+1, 'Samples', processed, 'loss =', current_loss)
                                 batch_loss = 0.0
                                 
                         except Exception as e:
-                            print(f'   ⚠️ Skipping sample {i} due to error: {e}')
+                            print('Skipping sample', i, 'due to error:', e)
                             continue
                 
                 if processed > 0:
                     avg_loss = epoch_loss / processed
                     train_losses.append(avg_loss)
-                    print(f'🎯 Epoch {epoch+1} completed:')
-                    print(f'   Average loss: {avg_loss:.4f}')
-                    print(f'   Samples processed: {processed}')
+                    print('Epoch', epoch+1, 'completed:')
+                    print('   Average loss:', avg_loss)
+                    print('   Samples processed:', processed)
                 else:
-                    print(f'⚠️ Epoch {epoch+1}: No samples processed')
+                    print('Epoch', epoch+1, ': No samples processed')
             
             final_loss = train_losses[-1] if train_losses else 0.0
             
@@ -270,7 +270,7 @@ implementation:
                 'final_loss': final_loss,
                 'epochs_trained': len(train_losses)
             }, trained_model_path)
-            print('💾 Model saved successfully')
+            print('Model saved successfully')
             
             # Save training report
             report = {
@@ -298,7 +298,7 @@ implementation:
             os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
             with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
-            print('💾 Training report saved')
+            print('Training report saved')
             
             # Save loss curves
             loss_data = {
@@ -311,7 +311,7 @@ implementation:
             os.makedirs(os.path.dirname(loss_curves_path) or '.', exist_ok=True)
             with open(loss_curves_path, 'w') as f:
                 json.dump(loss_data, f, indent=2)
-            print('💾 Loss curves saved')
+            print('Loss curves saved')
             
             # Save schema
             schema = {
@@ -331,15 +331,15 @@ implementation:
             os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
             with open(schema_output_path, 'w') as f:
                 json.dump(schema, f, indent=2)
-            print('💾 Schema saved')
+            print('Schema saved')
             
-            print('🎉 Training completed successfully!')
-            print(f'📊 Final loss: {final_loss:.4f}')
-            print(f'📈 Epochs trained: {len(train_losses)}')
-            print(f'💾 Model saved to: {trained_model_path}')
+            print('Training completed successfully!')
+            print('Final loss:', final_loss)
+            print('Epochs trained:', len(train_losses))
+            print('Model saved to:', trained_model_path)
             
         except Exception as e:
-            print('❌ Training failed:', e)
+            print('Training failed:', e)
             import traceback
             traceback.print_exc()
             
