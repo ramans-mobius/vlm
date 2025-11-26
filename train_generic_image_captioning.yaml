@@ -1,5 +1,5 @@
-name: Train Generic Image Captioning
-description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
+name: Train Generic Image Captioning - DEBUG VERSION
+description: Debug version that prints library versions and identifies compatibility issues
 inputs:
   - name: tokenizer_json
     type: Model
@@ -18,7 +18,6 @@ inputs:
   - name: training_parameters
     type: String
     default: "{}"
-    description: 'JSON string with training parameters (learning_rate, num_epochs, etc.)'
 outputs:
   - name: trained_model
     type: Model
@@ -36,78 +35,73 @@ implementation:
       - -c
       - |
         python3 -c "
-        import sys, os, json, pickle, torch
+        import sys, os, json, pickle, base64, io
+        from PIL import Image
         
-        # CRITICAL: PATCH THE PROBLEMATIC IMPORTS BEFORE IMPORTING NESY_FACTORY
-        print('Patching incompatible imports...')
+        print('=== DEBUG: LIBRARY VERSIONS ===')
         
-        # Patch 1: Fix torch._dynamo.utils.warn_once
-        import torch._dynamo.utils
-        if not hasattr(torch._dynamo.utils, 'warn_once'):
-            def warn_once(msg):
-                print(f'WARN: {msg}')
-            torch._dynamo.utils.warn_once = warn_once
-            print('Patched torch._dynamo.utils.warn_once')
+        # Print Python version
+        print('Python version: ' + str(sys.version))
         
-        # Patch 2: Prevent torchao from breaking transformers import
-        import importlib.abc
-        import importlib.util
-        import sys
-        from unittest.mock import MagicMock
+        # Try to import and print versions of key libraries
+        libraries = [
+            'torch', 'transformers', 'tokenizers', 'datasets', 
+            'torchvision', 'PIL', 'numpy', 'tqdm'
+        ]
         
-        class TorchAOFinder(importlib.abc.MetaPathFinder):
-            def find_spec(self, fullname, path, target=None):
-                if fullname == 'torchao.kernel.bsr_triton_ops':
-                    spec = importlib.util.spec_from_loader(fullname, loader=None)
-                    return spec
-                return None
-        
-        sys.meta_path.insert(0, TorchAOFinder())
-        sys.modules['torchao.kernel.bsr_triton_ops'] = MagicMock()
-        
-        # Patch 3: Add AutoProcessor to transformers if it doesn't exist
-        # Check what processor classes are available in current transformers
-        import transformers
-        print('Available transformers classes:', [x for x in dir(transformers) if 'Processor' in x or 'processor' in x.lower()])
-        
-        # If AutoProcessor doesn't exist, create a simple version
-        if not hasattr(transformers, 'AutoProcessor'):
-            print('AutoProcessor not found, creating compatibility wrapper...')
-            
-            # Try to import available processor classes
+        for lib in libraries:
             try:
-                from transformers import CLIPProcessor, GitProcessor
-                available_processors = {
-                    'microsoft/git-base': GitProcessor,
-                    'openai/clip-vit-base-patch32': CLIPProcessor
-                }
-                
-                def AutoProcessor.from_pretrained(model_name, **kwargs):
-                    if model_name in available_processors:
-                        return available_processors[model_name].from_pretrained(model_name, **kwargs)
-                    else:
-                        # Try CLIP as fallback
-                        return CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32', **kwargs)
-                
-                transformers.AutoProcessor = AutoProcessor
-                print('Created AutoProcessor compatibility wrapper')
-                
+                if lib == 'PIL':
+                    import PIL
+                    print(lib + ': ' + str(PIL.__version__))
+                elif lib == 'torch':
+                    import torch
+                    print(lib + ': ' + str(torch.__version__))
+                    print('CUDA available: ' + str(torch.cuda.is_available()))
+                    if torch.cuda.is_available():
+                        print('CUDA version: ' + str(torch.version.cuda))
+                else:
+                    module = __import__(lib)
+                    version = getattr(module, '__version__', 'version not found')
+                    print(lib + ': ' + str(version))
             except ImportError as e:
-                print(f'Could not create AutoProcessor wrapper: {e}')
-                # Create a mock AutoProcessor as last resort
-                class MockAutoProcessor:
-                    @staticmethod
-                    def from_pretrained(model_name, **kwargs):
-                        print(f'Mock AutoProcessor loading: {model_name}')
-                        return MagicMock()
+                print(lib + ': NOT INSTALLED - ' + str(e))
+            except Exception as e:
+                print(lib + ': Error getting version - ' + str(e))
+        
+        print('=== DEBUG: CHECKING TRANSFORMERS COMPATIBILITY ===')
+        try:
+            from transformers import AutoProcessor, AutoModelForCausalLM
+            print('✓ AutoProcessor and AutoModelForCausalLM imported successfully')
+            
+            # Check if we can instantiate a processor
+            try:
+                processor = AutoProcessor.from_pretrained('microsoft/git-base')
+                print('✓ AutoProcessor.from_pretrained works')
+            except Exception as e:
+                print('✗ AutoProcessor.from_pretrained failed: ' + str(e))
                 
-                transformers.AutoProcessor = MockAutoProcessor
-                print('Created MockAutoProcessor as fallback')
+        except Exception as e:
+            print('✗ Transformers import failed: ' + str(e))
+            import traceback
+            traceback.print_exc()
         
-        print('All import patches applied successfully')
+        print('=== DEBUG: CHECKING NESY-FACTORY COMPONENTS ===')
+        try:
+            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+            print('✓ CLIPVisionEncoder imported successfully')
+        except Exception as e:
+            print('✗ CLIPVisionEncoder import failed: ' + str(e))
+            import traceback
+            traceback.print_exc()
         
-        print('Number of arguments:', len(sys.argv))
-        print('Arguments:', sys.argv)
+        print('=== DEBUG: SYSTEM INFORMATION ===')
+        print('Current working directory: ' + str(os.getcwd()))
+        print('Python executable: ' + str(sys.executable))
+        print('System path: ' + str(sys.path))
+        
+        # Now continue with the actual training logic...
+        print('=== STARTING ACTUAL TRAINING LOGIC ===')
         
         # Get arguments from command line
         tokenizer_json_path = sys.argv[1]
@@ -124,170 +118,76 @@ implementation:
         schema_output_path = sys.argv[12]
 
         print('Starting generic image captioning training...')
-        print('Training parameters string:', training_params_str)
-
-        # Load model config from parent brick
-        with open(model_config_path, 'r') as f:
-            model_config = json.load(f)
-        print('Loaded model config from parent brick')
-
+        
         # Parse training parameters
         try:
-            training_params = json.loads(training_params_str) if training_params_str and training_params_str.strip() not in ['{}', ''] else {}
-            print('Successfully parsed training parameters from JSON string')
-            print('Parsed training parameters:', training_params)
+            training_params = json.loads(training_params_str) if training_params_str.strip() not in ['{}', ''] else {}
         except json.JSONDecodeError as e:
-            print('WARN: Invalid training_parameters JSON: ' + str(e) + ', using empty training params')
+            print('WARN: Invalid training_params JSON: ' + str(e) + ', using empty config')
             training_params = {}
 
-        # Extract training parameters with defaults
-        learning_rate = training_params.get('learning_rate', model_config.get('training_parameters', {}).get('learning_rate', 5e-5))
-        num_epochs = training_params.get('num_epochs', model_config.get('training_parameters', {}).get('num_epochs', 10))
-        batch_size = training_params.get('batch_size', model_config.get('training_parameters', {}).get('batch_size', 8))
-        max_train_samples = training_params.get('max_train_samples', model_config.get('training_parameters', {}).get('max_train_samples', 1000))
-        gradient_accumulation_steps = training_params.get('gradient_accumulation_steps', model_config.get('training_parameters', {}).get('gradient_accumulation_steps', 1))
-        validation_split = training_params.get('validation_split', model_config.get('training_parameters', {}).get('validation_split', 0.1))
-        language_model_name = model_config.get('language_model_name', 'microsoft/git-base')
-
-        print('Final training parameters:')
-        print('Language model: ' + language_model_name)
-        print('Learning rate: ' + str(learning_rate))
-        print('Num epochs: ' + str(num_epochs))
-        print('Batch size: ' + str(batch_size))
-        print('Max train samples: ' + str(max_train_samples))
-        print('Gradient accumulation steps: ' + str(gradient_accumulation_steps))
-        print('Validation split: ' + str(validation_split))
-
-        # NOW import nesy_factory after ALL patches are applied
-        try:
-            from nesy_factory.language_model.image_captioning_trainer import HFImageCaptioningTrainer
-            print('Successfully imported HFImageCaptioningTrainer with all patches!')
-        except ImportError as e:
-            error_msg = 'HFImageCaptioningTrainer import failed even with patches: ' + str(e)
-            print('ERROR: ' + error_msg)
-            
-            error_report = {
-                'status': 'error',
-                'error': error_msg,
-                'suggestion': 'The import patches were not sufficient to resolve compatibility issues'
-            }
-            
-            os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
-            with open(training_report_path, 'w') as f:
-                json.dump(error_report, f, indent=2)
-            
-            sys.exit(1)
-
-        # Load datasets
-        with open(caption_dataset_path, 'rb') as f:
-            caption_data = pickle.load(f)
-        
-        with open(dataset_metadata_path, 'rb') as f:
-            dataset_meta = pickle.load(f)
-
-        # Load vision encoder config
+        # Load configurations
         with open(vision_encoder_config_path, 'r') as f:
             vision_config = json.load(f)
+        
+        with open(model_config_path, 'r') as f:
+            model_cfg = json.load(f)
 
-        print('Training generic image captioning model on ' + str(len(caption_data)) + ' images')
-        print('Domain: ' + dataset_meta.get('caption_strategy', 'generic'))
-        print('Classes: ' + str(dataset_meta.get('detected_classes', ['various'])))
-
-        # Initialize trainer
-        trainer = HFImageCaptioningTrainer()
-
-        # Run training with combined parameters
+        # Load dataset
         try:
-            results = trainer.run(
-                vision_encoder_config=vision_config,
-                language_model_name=language_model_name,
-                dataset_name='generic_custom_dataset',
-                max_train_samples=min(max_train_samples, len(caption_data)),
-                learning_rate=learning_rate,
-                num_epochs=num_epochs,
-                batch_size=batch_size,
-                gradient_accumulation_steps=gradient_accumulation_steps,
-                output_dir=os.path.dirname(trained_model_path) or '.'
-            )
-            print('Training completed successfully!')
+            with open(caption_dataset_path, 'rb') as f:
+                caption_data = pickle.load(f)
+            print('Loaded caption dataset with ' + str(len(caption_data)) + ' samples')
         except Exception as e:
-            error_msg = f'Training failed: {str(e)}'
-            print('ERROR: ' + error_msg)
-            import traceback
-            traceback.print_exc()
-            results = {
-                'status': 'error',
-                'error': error_msg,
-                'train_losses': [],
-                'test_losses': [],
-                'learning_rates': []
-            }
+            print('Failed to load caption dataset: ' + str(e))
+            caption_data = []
 
-        # Save trained model
-        os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
-        training_summary = {
-            'status': 'completed' if results.get('status') != 'error' else 'error',
-            'training_results': results,
-            'model_saved': trained_model_path,
-            'dataset_info': dataset_meta,
-            'training_parameters': {
-                'learning_rate': learning_rate,
-                'num_epochs': num_epochs,
-                'batch_size': batch_size,
-                'max_train_samples': max_train_samples,
-                'gradient_accumulation_steps': gradient_accumulation_steps,
-                'validation_split': validation_split
-            },
-            'model_config_used': model_config,
-            'user_training_params': training_params,
-            'domain_adaptability': 'high',
-            'supported_image_types': dataset_meta.get('detected_classes', ['generic'])
+        # Simplified training simulation
+        print('Simulating training process...')
+        
+        # Create dummy training report
+        report = {
+            'status': 'debug_completed',
+            'epochs_completed': 0,
+            'final_loss': 0.0,
+            'training_samples': len(caption_data),
+            'library_versions_checked': True,
+            'compatibility_issues_found': 'see_debug_output'
         }
-        torch.save(training_summary, trained_model_path)
 
-        # Save training report
+        # Create dummy loss curves
+        loss_data = {
+            'epochs': [1, 2, 3],
+            'train_loss': [2.5, 1.8, 1.2],
+            'val_loss': [2.7, 2.0, 1.5]
+        }
+
+        # Save outputs
+        os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
+        with open(trained_model_path, 'w') as f:
+            json.dump({'status': 'debug_model', 'message': 'Training completed in debug mode'}, f)
+
         os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
         with open(training_report_path, 'w') as f:
-            json.dump(results, f, indent=2)
+            json.dump(report, f, indent=2)
 
-        # Save loss curves
-        loss_data = {
-            'train_losses': results.get('train_losses', []),
-            'test_losses': results.get('test_losses', []),
-            'learning_rates': results.get('learning_rates', [])
-        }
         os.makedirs(os.path.dirname(loss_curves_path) or '.', exist_ok=True)
         with open(loss_curves_path, 'w') as f:
             json.dump(loss_data, f, indent=2)
 
-        # Save schema
         schema = {
-            'training_parameters': training_summary['training_parameters'],
-            'dataset_info': dataset_meta,
-            'results_summary': {
-                'final_train_loss': results.get('train_losses', [])[-1] if results.get('train_losses') else None,
-                'final_test_loss': results.get('test_losses', [])[-1] if results.get('test_losses') else None,
-                'classes_learned': dataset_meta.get('detected_classes', []),
-                'domain_adaptability': 'high'
-            },
-            'model_config_reference': model_config,
-            'user_parameters_applied': training_params,
-            'generic_capabilities': [
-                'cross_domain_captioning',
-                'multiple_image_types',
-                'adaptive_descriptions',
-                'zero_shot_understanding'
-            ]
+            'training_status': 'debug_completed',
+            'compatibility_check': 'performed',
+            'next_steps': 'check_debug_output_for_issues'
         }
         
         os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print('Generic image captioning training completed!')
-        print('Trained model saved to: ' + trained_model_path)
-        print('Training report saved to: ' + training_report_path)
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11"
+        print('Debug training completed successfully!')
+        print('Check the debug output above for library compatibility issues.')
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12"
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: vision_encoder_config}
