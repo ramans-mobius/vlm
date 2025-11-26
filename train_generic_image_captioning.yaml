@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning 
+name: Train Generic Image Captioning 2
 description: Import language model components directly, avoid nesy-factory init
 inputs:
   - name: tokenizer_json
@@ -48,7 +48,6 @@ implementation:
             "model_py": "/tmp/inputs/model_py/data",
             "caption_dataset": "/tmp/inputs/caption_dataset/data",
             "dataset_metadata": "/tmp/inputs/dataset_metadata/data",
-            "training_parameters": "/tmp/inputs/training_parameters/data",
             "trained_model": "/tmp/outputs/trained_model/data",
             "training_report": "/tmp/outputs/training_report/data",
             "loss_curves": "/tmp/outputs/loss_curves/data",
@@ -65,23 +64,24 @@ implementation:
             ap.add_argument("--model-py", default=None)
             ap.add_argument("--caption-dataset", default=None)
             ap.add_argument("--dataset-metadata", default=None)
-            ap.add_argument("--training-parameters", default=None)
+            ap.add_argument("--training-parameters", default="{}")
             ap.add_argument("--trained-model", default=None)
             ap.add_argument("--training-report", default=None)
             ap.add_argument("--loss-curves", default=None)
             ap.add_argument("--schema-output", default=None)
             args = ap.parse_args()
             for k in ("tokenizer_json","vision_encoder_config","model_config","model_weights","model_py",
-                      "caption_dataset","dataset_metadata","training_parameters",
+                      "caption_dataset","dataset_metadata",
                       "trained_model","training_report","loss_curves","schema_output"):
                 if getattr(args, k.replace("-", "_")) in (None, ""):
                     setattr(args, k.replace("-", "_"), DEFAULTS[k])
             print("[DEBUG] resolved paths:")
             for k in ("tokenizer_json","vision_encoder_config","model_config","model_weights","model_py",
-                      "caption_dataset","dataset_metadata","training_parameters",
+                      "caption_dataset","dataset_metadata",
                       "trained_model","training_report","loss_curves","schema_output"):
                 v = getattr(args, k.replace("-", "_"))
                 print(f"  {k:20s} -> {v} (exists={_exist(v)})")
+            print(f"  training_parameters  -> {args.training_parameters}")
             subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch>=2.6.0', 'torchvision>=0.19.0', '--force-reinstall'], capture_output=True)
             subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'torchao'], capture_output=True)
             from PIL import Image
@@ -89,8 +89,7 @@ implementation:
                 vision_config = json.load(f)
             with open(args.caption_dataset, 'rb') as f:
                 caption_data = pickle.load(f)
-            with open(args.training_parameters, 'r') as f:
-                training_params = json.load(f)
+            training_params = json.loads(args.training_parameters)
             num_epochs = training_params.get('epochs', 3)
             learning_rate = training_params.get('learning_rate', 5e-5)
             batch_size = training_params.get('batch_size', 4)
