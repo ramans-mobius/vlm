@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning
+name: 2 Train Generic Image Captioning
 description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
 inputs:
   - name: tokenizer_json
@@ -35,18 +35,42 @@ implementation:
       - sh
       - -c
       - |
-        # INSTALL COMPATIBLE TORCH VERSIONS AT RUNTIME
-        echo "Installing compatible torch versions..."
-        pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
-        pip install transformers==4.35.2
-        pip install torchao==0.1.0 --no-deps  # Install without dependencies to avoid conflicts
-        
-        echo "Starting training with compatible versions..."
         python3 -c "
         import sys, os, json, pickle, torch
         
-        print('Torch version:', torch.__version__)
-        print('CUDA available:', torch.cuda.is_available())
+        # CRITICAL: PATCH THE PROBLEMATIC IMPORTS BEFORE IMPORTING NESY_FACTORY
+        print('Patching incompatible imports...')
+        
+        # Patch 1: Fix torch._dynamo.utils.warn_once
+        import torch._dynamo.utils
+        if not hasattr(torch._dynamo.utils, 'warn_once'):
+            def warn_once(msg):
+                print(f'WARN: {msg}')
+            torch._dynamo.utils.warn_once = warn_once
+            print('Patched torch._dynamo.utils.warn_once')
+        
+        # Patch 2: Prevent torchao from breaking transformers import
+        # We'll intercept the import and provide a mock for the problematic function
+        import importlib.abc
+        import importlib.util
+        import sys
+        
+        class TorchAOFinder(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path, target=None):
+                if fullname == 'torchao.kernel.bsr_triton_ops':
+                    # Return a mock spec for the problematic module
+                    spec = importlib.util.spec_from_loader(fullname, loader=None)
+                    return spec
+                return None
+        
+        # Add our finder to intercept torchao imports
+        sys.meta_path.insert(0, TorchAOFinder())
+        
+        # Patch 3: Create mock bsr_triton_ops module
+        from unittest.mock import MagicMock
+        sys.modules['torchao.kernel.bsr_triton_ops'] = MagicMock()
+        
+        print('Import patches applied successfully')
         
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
@@ -100,17 +124,18 @@ implementation:
         print('Gradient accumulation steps: ' + str(gradient_accumulation_steps))
         print('Validation split: ' + str(validation_split))
 
+        # NOW import nesy_factory after patches are applied
         try:
             from nesy_factory.language_model.image_captioning_trainer import HFImageCaptioningTrainer
-            print('Successfully imported HFImageCaptioningTrainer')
+            print('Successfully imported HFImageCaptioningTrainer with patches!')
         except ImportError as e:
-            error_msg = 'HFImageCaptioningTrainer import failed: ' + str(e)
+            error_msg = 'HFImageCaptioningTrainer import failed even with patches: ' + str(e)
             print('ERROR: ' + error_msg)
             
             error_report = {
                 'status': 'error',
                 'error': error_msg,
-                'suggestion': 'Ensure nesy_factory is properly installed with image captioning components'
+                'suggestion': 'The import patches were not sufficient to resolve compatibility issues'
             }
             
             os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
@@ -138,22 +163,36 @@ implementation:
         trainer = HFImageCaptioningTrainer()
 
         # Run training with combined parameters
-        results = trainer.run(
-            vision_encoder_config=vision_config,
-            language_model_name=language_model_name,
-            dataset_name='generic_custom_dataset',
-            max_train_samples=min(max_train_samples, len(caption_data)),
-            learning_rate=learning_rate,
-            num_epochs=num_epochs,
-            batch_size=batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            output_dir=os.path.dirname(trained_model_path) or '.'
-        )
+        try:
+            results = trainer.run(
+                vision_encoder_config=vision_config,
+                language_model_name=language_model_name,
+                dataset_name='generic_custom_dataset',
+                max_train_samples=min(max_train_samples, len(caption_data)),
+                learning_rate=learning_rate,
+                num_epochs=num_epochs,
+                batch_size=batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                output_dir=os.path.dirname(trained_model_path) or '.'
+            )
+            print('Training completed successfully!')
+        except Exception as e:
+            error_msg = f'Training failed: {str(e)}'
+            print('ERROR: ' + error_msg)
+            import traceback
+            traceback.print_exc()
+            results = {
+                'status': 'error',
+                'error': error_msg,
+                'train_losses': [],
+                'test_losses': [],
+                'learning_rates': []
+            }
 
         # Save trained model
         os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
         training_summary = {
-            'status': 'completed',
+            'status': 'completed' if results.get('status') != 'error' else 'error',
             'training_results': results,
             'model_saved': trained_model_path,
             'dataset_info': dataset_meta,
