@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning
+name: 22 Train Generic Image Captioning
 description: Image captioning training with compatible library versions
 inputs:
   - name: tokenizer_json
@@ -29,8 +29,9 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io
         
-        # Install compatible versions first
+        # Install compatible versions first - FIX numpy compatibility
         import subprocess
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'numpy<2', '--force-reinstall'], capture_output=True)
         subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0', 'torchvision==0.16.0', 'transformers==4.37.2', '--force-reinstall'], capture_output=True)
         
         tokenizer_json_path = sys.argv[1]
@@ -58,6 +59,10 @@ implementation:
         
         try:
             import torch
+            print('PyTorch version:', torch.__version__)
+            import numpy as np
+            print('NumPy version:', np.__version__)
+            
             from nesy_factory.language_model.image_tokenizer import HFTokenizer
             from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
             from transformers import AutoModelForCausalLM
@@ -150,7 +155,8 @@ implementation:
                 'samples_processed': processed,
                 'total_samples': len(caption_data),
                 'device_used': device,
-                'torch_version': torch.__version__
+                'torch_version': torch.__version__,
+                'numpy_version': np.__version__
             }
             
             os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
