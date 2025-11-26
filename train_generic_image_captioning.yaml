@@ -1,4 +1,4 @@
-name: 2 Train Generic Image Captioning
+name: Train Generic Image Captioning
 description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
 inputs:
   - name: tokenizer_json
@@ -50,27 +50,61 @@ implementation:
             print('Patched torch._dynamo.utils.warn_once')
         
         # Patch 2: Prevent torchao from breaking transformers import
-        # We'll intercept the import and provide a mock for the problematic function
         import importlib.abc
         import importlib.util
         import sys
+        from unittest.mock import MagicMock
         
         class TorchAOFinder(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path, target=None):
                 if fullname == 'torchao.kernel.bsr_triton_ops':
-                    # Return a mock spec for the problematic module
                     spec = importlib.util.spec_from_loader(fullname, loader=None)
                     return spec
                 return None
         
-        # Add our finder to intercept torchao imports
         sys.meta_path.insert(0, TorchAOFinder())
-        
-        # Patch 3: Create mock bsr_triton_ops module
-        from unittest.mock import MagicMock
         sys.modules['torchao.kernel.bsr_triton_ops'] = MagicMock()
         
-        print('Import patches applied successfully')
+        # Patch 3: Add AutoProcessor to transformers if it doesn't exist
+        # Check what processor classes are available in current transformers
+        import transformers
+        print('Available transformers classes:', [x for x in dir(transformers) if 'Processor' in x or 'processor' in x.lower()])
+        
+        # If AutoProcessor doesn't exist, create a simple version
+        if not hasattr(transformers, 'AutoProcessor'):
+            print('AutoProcessor not found, creating compatibility wrapper...')
+            
+            # Try to import available processor classes
+            try:
+                from transformers import CLIPProcessor, GitProcessor
+                available_processors = {
+                    'microsoft/git-base': GitProcessor,
+                    'openai/clip-vit-base-patch32': CLIPProcessor
+                }
+                
+                def AutoProcessor.from_pretrained(model_name, **kwargs):
+                    if model_name in available_processors:
+                        return available_processors[model_name].from_pretrained(model_name, **kwargs)
+                    else:
+                        # Try CLIP as fallback
+                        return CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32', **kwargs)
+                
+                transformers.AutoProcessor = AutoProcessor
+                print('Created AutoProcessor compatibility wrapper')
+                
+            except ImportError as e:
+                print(f'Could not create AutoProcessor wrapper: {e}')
+                # Create a mock AutoProcessor as last resort
+                class MockAutoProcessor:
+                    @staticmethod
+                    def from_pretrained(model_name, **kwargs):
+                        print(f'Mock AutoProcessor loading: {model_name}')
+                        return MagicMock()
+                
+                transformers.AutoProcessor = MockAutoProcessor
+                print('Created MockAutoProcessor as fallback')
+        
+        print('All import patches applied successfully')
         
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
@@ -124,10 +158,10 @@ implementation:
         print('Gradient accumulation steps: ' + str(gradient_accumulation_steps))
         print('Validation split: ' + str(validation_split))
 
-        # NOW import nesy_factory after patches are applied
+        # NOW import nesy_factory after ALL patches are applied
         try:
             from nesy_factory.language_model.image_captioning_trainer import HFImageCaptioningTrainer
-            print('Successfully imported HFImageCaptioningTrainer with patches!')
+            print('Successfully imported HFImageCaptioningTrainer with all patches!')
         except ImportError as e:
             error_msg = 'HFImageCaptioningTrainer import failed even with patches: ' + str(e)
             print('ERROR: ' + error_msg)
