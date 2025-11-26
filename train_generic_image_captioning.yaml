@@ -1,5 +1,5 @@
-name: Train Generic Image Captioning - PYTORCH UPGRADED
-description: Upgrade PyTorch to fix security vulnerability
+name: Train Generic Image Captioning
+description: Import language model components directly, avoid nesy-factory init
 inputs:
   - name: tokenizer_json
     type: Model
@@ -29,7 +29,7 @@ outputs:
   - name: loss_curves
     type: Data
   - name: schema_json
-    type: Data
+  - type: Data
 implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
@@ -40,25 +40,21 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io, subprocess
         
-        print('=== UPGRADING PYTORCH TO FIX SECURITY ISSUE ===')
+        print('=== DIRECT LANGUAGE MODEL IMPORTS ONLY ===')
         
-        # Upgrade PyTorch to fix CVE-2025-32434
-        print('Upgrading PyTorch to >= 2.6...')
-        result = subprocess.run([
+        # Upgrade PyTorch and remove torchao
+        subprocess.run([
             sys.executable, '-m', 'pip', 'install', 
             'torch>=2.6.0', 'torchvision>=0.19.0',
             '--force-reinstall'
-        ], capture_output=True, text=True)
-        print(f'PyTorch upgrade: {result.returncode}')
+        ], capture_output=True)
         
-        # Remove torchao if it exists
         subprocess.run([
             sys.executable, '-m', 'pip', 'uninstall', '-y', 'torchao'
         ], capture_output=True)
         
-        print(' PyTorch upgraded, proceeding with imports...')
+        print(' Environment ready')
         
-        # Now import everything
         from PIL import Image
         
         # Get arguments
@@ -91,31 +87,42 @@ implementation:
         print(f'Loaded {len(caption_data)} training samples')
         print(f'Training config: {num_epochs} epochs, lr={learning_rate}, batch_size={batch_size}')
 
-        # PROPER TRAINING WITH UPGRADED PYTORCH
-        print(' STARTING TRAINING WITH UPGRADED PYTORCH...')
+        # DIRECT IMPORTS - NO NESY-FACTORY INIT
+        print(' STARTING TRAINING WITH DIRECT IMPORTS...')
         
         try:
             import torch
             import torch.nn as nn
             print(f'PyTorch version: {torch.__version__}')
             
-            # Now import transformers and nesy-factory
+            # Import transformers directly
             from transformers import AutoTokenizer, AutoModelForCausalLM
-            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
             
-            print(' All imports successful!')
+            # Import CLIPVisionEncoder directly from its file (avoid nesy-factory __init__)
+            import importlib.util
+            import types
+            
+            # Load vision_encoders module directly
+            vision_encoders_path = '/usr/local/lib/python3.10/site-packages/nesy_factory/language_model/vision_encoders.py'
+            spec = importlib.util.spec_from_file_location('vision_encoders_module', vision_encoders_path)
+            vision_module = importlib.util.module_from_spec(spec)
+            
+            # Execute the module to load CLIPVisionEncoder
+            spec.loader.exec_module(vision_module)
+            CLIPVisionEncoder = vision_module.CLIPVisionEncoder
+            
+            print(' Direct imports successful - no GNN dependencies')
             
             # Initialize device
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             print(f'Using device: {device}')
             
-            # Initialize nesy-factory components
+            # Initialize components
             vision_encoder = CLIPVisionEncoder(
                 model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
                 projection_dim=vision_config.get('projection_dim', 512)
             )
             
-            # Use transformers tokenizer and model
             tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -219,14 +226,14 @@ implementation:
         # Save results
         report = {
             'status': 'completed',
-            'training_approach': 'transformers_with_pytorch_upgrade',
+            'training_approach': 'direct_language_imports',
             'epochs_completed': len(train_losses),
             'final_train_loss': float(final_train_loss),
             'final_val_loss': float(final_val_loss),
             'training_samples': len(caption_data),
             'samples_processed': processed_samples,
             'pytorch_version': torch.__version__,
-            'components_used': ['CLIPVisionEncoder', 'AutoTokenizer', 'AutoModelForCausalLM']
+            'gnn_dependencies_avoided': True
         }
         
         loss_data = {
@@ -243,7 +250,7 @@ implementation:
                 'training_completed': True,
                 'final_val_loss': float(final_val_loss),
                 'epochs_trained': len(train_losses),
-                'pytorch_version': torch.__version__
+                'gnn_dependencies_avoided': True
             }, f, indent=2)
 
         os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
@@ -257,7 +264,7 @@ implementation:
         schema = {
             'training_completed': True,
             'model_ready_for_inference': True,
-            'pytorch_upgraded': True,
+            'gnn_dependencies_avoided': True,
             'training_metrics': {
                 'final_val_loss': float(final_val_loss),
                 'epochs_completed': len(train_losses)
@@ -268,11 +275,11 @@ implementation:
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print(' FINAL TRAINING SUCCESS! PYTORCH UPGRADED')
-        print('   • PyTorch >= 2.6 installed')
-        print('   • Security vulnerability fixed')
-        print('   • Transformers working properly')
-        print('   • Nesy-factory components used')
+        print(' FINAL SUCCESS! DIRECT LANGUAGE MODEL IMPORTS')
+        print('   • No nesy-factory __init__ imports')
+        print('   • No GNN dependencies')
+        print('   • Pure language model training')
+        print('   • Real transformers + CLIP training')
         " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12"
     args:
       - {inputPath: tokenizer_json}
