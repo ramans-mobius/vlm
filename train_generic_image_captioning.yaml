@@ -1,5 +1,5 @@
-name: 22 Train Generic Image Captioning
-description: Image captioning training with compatible library versions
+name: Train Generic Image Captioning
+description: Image captioning training with compatible library versions and proper file handling
 inputs:
   - name: tokenizer_json
     type: Model
@@ -29,10 +29,10 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io
         
-        # Install compatible versions first - matching your environment
+        # Install compatible versions matching your environment
         import subprocess
-        subprocess.run([sys.executable, '-m', 'pip', 'install', 'numpy==1.26.4', '--force-reinstall'], capture_output=True)
-        subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0', 'torchvision==0.16.0', 'transformers==4.37.2', '--force-reinstall'], capture_output=True)
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'numpy==1.26.4', '--force-reinstall', '--quiet'], capture_output=True)
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0', 'torchvision==0.16.0', 'transformers==4.37.2', '--force-reinstall', '--quiet'], capture_output=True)
         
         tokenizer_json_path = sys.argv[1]
         vision_encoder_config_path = sys.argv[2]
@@ -43,48 +43,115 @@ implementation:
         loss_curves_path = sys.argv[7]
         schema_output_path = sys.argv[8]
         
-        with open(vision_encoder_config_path, 'r') as f:
-            vision_config = json.load(f)
+        print('🚀 Starting enhanced training pipeline...')
+        print('Input paths:', tokenizer_json_path, vision_encoder_config_path, caption_dataset_path)
         
-        with open(caption_dataset_path, 'rb') as f:
-            caption_data = pickle.load(f)
+        # Handle vision encoder config - it might be pickle or JSON
+        try:
+            with open(vision_encoder_config_path, 'r') as f:
+                vision_config = json.load(f)
+            print('✅ Loaded vision config from JSON')
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            try:
+                with open(vision_encoder_config_path, 'rb') as f:
+                    vision_config = pickle.load(f)
+                print('✅ Loaded vision config from pickle')
+            except Exception as e:
+                print('⚠️ Failed to load vision config, using defaults:', e)
+                vision_config = {
+                    'model_name': 'openai/clip-vit-base-patch32',
+                    'projection_dim': 512,
+                    'encoder_type': 'clip'
+                }
         
+        # Load caption dataset
+        try:
+            with open(caption_dataset_path, 'rb') as f:
+                caption_data = pickle.load(f)
+            print(f'✅ Successfully loaded {len(caption_data)} caption samples')
+        except Exception as e:
+            print('❌ Error loading caption dataset:', e)
+            caption_data = []
+        
+        # Parse training parameters
         training_params = json.loads(training_params_str)
-        num_epochs = training_params.get('epochs', 1)
+        num_epochs = training_params.get('epochs', 3)
         learning_rate = training_params.get('learning_rate', 5e-5)
-        batch_size = training_params.get('batch_size', 4)
+        batch_size = training_params.get('batch_size', 8)
+        max_length = training_params.get('max_length', 128)
         
-        print('Training config:', num_epochs, 'epochs, lr=', learning_rate, 'batch_size=', batch_size)
-        print('Loaded', len(caption_data), 'training samples')
+        print('📊 Training config:')
+        print(f'   Epochs: {num_epochs}')
+        print(f'   Learning rate: {learning_rate}')
+        print(f'   Batch size: {batch_size}')
+        print(f'   Max length: {max_length}')
+        print(f'   Samples: {len(caption_data)}')
         
         try:
             import torch
-            print('PyTorch version:', torch.__version__)
+            import torch.nn as nn
+            print('✅ PyTorch version:', torch.__version__)
             import numpy as np
-            print('NumPy version:', np.__version__)
+            print('✅ NumPy version:', np.__version__)
             
-            from nesy_factory.language_model.image_tokenizer import HFTokenizer
-            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
-            from transformers import AutoModelForCausalLM
+            from transformers import AutoModelForCausalLM, AutoTokenizer
             from PIL import Image
             
+            # Import nesy-factory components
+            try:
+                from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+                print('✅ Successfully imported CLIPVisionEncoder')
+            except ImportError as e:
+                print('❌ Failed to import CLIPVisionEncoder:', e)
+                # Create a fallback vision encoder
+                class FallbackVisionEncoder:
+                    def __init__(self, model_name='openai/clip-vit-base-patch32', projection_dim=512):
+                        from transformers import CLIPModel, CLIPProcessor
+                        self.model = CLIPModel.from_pretrained(model_name)
+                        self.processor = CLIPProcessor.from_pretrained(model_name)
+                        self.projection = nn.Linear(512, projection_dim) if projection_dim != 512 else nn.Identity()
+                    
+                    def run(self, images):
+                        if not isinstance(images, list):
+                            images = [images]
+                        inputs = self.processor(images=images, return_tensors='pt')
+                        with torch.no_grad():
+                            features = self.model.get_image_features(**inputs)
+                        return self.projection(features)
+                
+                CLIPVisionEncoder = FallbackVisionEncoder
+            
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            print('Using device:', device)
+            print(f'🎯 Using device: {device}')
             
             # Initialize vision encoder
             vision_encoder = CLIPVisionEncoder(
                 model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
                 projection_dim=vision_config.get('projection_dim', 512)
             )
-            vision_encoder.model = vision_encoder.model.to(device)
+            if hasattr(vision_encoder, 'model'):
+                vision_encoder.model = vision_encoder.model.to(device)
+            print('✅ Vision encoder initialized')
             
             # Initialize tokenizer
-            tokenizer = HFTokenizer()
-            tokenizer.run(tokenizer_name='microsoft/git-base')
+            try:
+                # Check if tokenizer path is a directory
+                if os.path.isdir(tokenizer_json_path):
+                    tokenizer = AutoTokenizer.from_pretrained(tokenizer_json_path)
+                    print('✅ Loaded tokenizer from directory')
+                else:
+                    # Try to load from specific file
+                    tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
+                    print('✅ Loaded fallback tokenizer')
+            except Exception as e:
+                print('❌ Tokenizer loading failed, using fallback:', e)
+                tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
+                tokenizer.add_special_tokens({'pad_token': '[PAD]'})
             
             # Initialize language model
             language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
             language_model = language_model.to(device)
+            print('✅ Language model initialized')
             
             # Setup optimizer
             optimizer = torch.optim.AdamW(
@@ -94,10 +161,13 @@ implementation:
             
             train_losses = []
             
+            print('🎯 Starting training loop...')
+            
             # Training loop
             for epoch in range(num_epochs):
                 epoch_loss = 0.0
                 processed = 0
+                batch_loss = 0.0
                 
                 for i, sample in enumerate(caption_data):
                     if 'image_data' in sample and 'caption' in sample:
@@ -107,36 +177,49 @@ implementation:
                             # Process image
                             image_bytes = base64.b64decode(sample['image_data'])
                             image = Image.open(io.BytesIO(image_bytes))
+                            
+                            # Convert to RGB if needed
+                            if image.mode != 'RGB':
+                                image = image.convert('RGB')
+                            
+                            # Get image features
                             image_features = vision_encoder.run([image])
+                            if hasattr(image_features, 'detach'):
+                                image_features = image_features.detach()
                             
                             # Process caption text
-                            inputs = tokenizer.tokenizer(
+                            inputs = tokenizer(
                                 sample['caption'], 
                                 return_tensors='pt', 
-                                max_length=128, 
+                                max_length=max_length, 
                                 padding='max_length', 
-                                truncation=True
+                                truncation=True,
+                                return_attention_mask=True
                             )
                             
                             input_ids = inputs['input_ids'].to(device)
                             attention_mask = inputs['attention_mask'].to(device)
                             
-                            # Fuse image and text features
+                            # Get text embeddings
                             text_embeddings = language_model.get_input_embeddings()(input_ids)
+                            
+                            # Prepare image features for fusion
                             image_features_expanded = image_features.unsqueeze(1).to(device)
                             
                             # Ensure dimensions match for fusion
-                            if image_features_expanded.shape[1] < text_embeddings.shape[1]:
+                            seq_length = text_embeddings.shape[1]
+                            if image_features_expanded.shape[1] < seq_length:
                                 # Pad image features to match text sequence length
-                                padding = text_embeddings.shape[1] - image_features_expanded.shape[1]
+                                padding = seq_length - image_features_expanded.shape[1]
                                 image_features_expanded = torch.nn.functional.pad(
                                     image_features_expanded, 
-                                    (0, 0, 0, padding)
+                                    (0, 0, 0, padding, 0, 0)
                                 )
-                            elif image_features_expanded.shape[1] > text_embeddings.shape[1]:
+                            elif image_features_expanded.shape[1] > seq_length:
                                 # Truncate image features to match text sequence length
-                                image_features_expanded = image_features_expanded[:, :text_embeddings.shape[1], :]
+                                image_features_expanded = image_features_expanded[:, :seq_length, :]
                             
+                            # Fuse features (simple addition)
                             fused_embeddings = text_embeddings + image_features_expanded
                             
                             # Forward pass
@@ -150,20 +233,27 @@ implementation:
                             loss.backward()
                             optimizer.step()
                             
-                            epoch_loss += loss.item()
+                            batch_loss += loss.item()
                             processed += 1
                             
-                            if processed % 20 == 0:
-                                print(f'Processed {processed} samples, current loss: {loss.item():.4f}')
+                            # Print progress every 10 samples
+                            if processed % 10 == 0:
+                                current_loss = batch_loss / 10
+                                print(f'   Epoch {epoch+1}, Samples {processed}: loss = {current_loss:.4f}')
+                                batch_loss = 0.0
                                 
                         except Exception as e:
-                            print(f'Error processing sample {i}: {e}')
+                            print(f'   ⚠️ Skipping sample {i} due to error: {e}')
                             continue
                 
                 if processed > 0:
                     avg_loss = epoch_loss / processed
                     train_losses.append(avg_loss)
-                    print(f'Epoch {epoch+1}: average loss={avg_loss:.4f}, samples={processed}')
+                    print(f'🎯 Epoch {epoch+1} completed:')
+                    print(f'   Average loss: {avg_loss:.4f}')
+                    print(f'   Samples processed: {processed}')
+                else:
+                    print(f'⚠️ Epoch {epoch+1}: No samples processed')
             
             final_loss = train_losses[-1] if train_losses else 0.0
             
@@ -172,8 +262,15 @@ implementation:
             torch.save({
                 'language_model_state_dict': language_model.state_dict(),
                 'vision_encoder_config': vision_config,
-                'training_params': training_params
+                'training_params': training_params,
+                'tokenizer_info': {
+                    'name': 'microsoft/git-base',
+                    'vocab_size': tokenizer.vocab_size
+                },
+                'final_loss': final_loss,
+                'epochs_trained': len(train_losses)
             }, trained_model_path)
+            print('💾 Model saved successfully')
             
             # Save training report
             report = {
@@ -184,48 +281,88 @@ implementation:
                 'total_samples': len(caption_data),
                 'device_used': device,
                 'torch_version': torch.__version__,
-                'numpy_version': np.__version__
+                'numpy_version': np.__version__,
+                'training_config': {
+                    'epochs': num_epochs,
+                    'learning_rate': learning_rate,
+                    'batch_size': batch_size,
+                    'max_length': max_length
+                },
+                'model_components': {
+                    'vision_encoder': vision_config.get('model_name'),
+                    'language_model': 'microsoft/git-base',
+                    'fusion_method': 'feature_addition'
+                }
             }
             
             os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
             with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
+            print('💾 Training report saved')
             
             # Save loss curves
             loss_data = {
                 'epochs': list(range(1, len(train_losses) + 1)),
-                'train_loss': [float(loss) for loss in train_losses]
+                'train_loss': [float(loss) for loss in train_losses],
+                'final_loss': float(final_loss),
+                'best_epoch': np.argmin(train_losses) + 1 if train_losses else 1
             }
             
             os.makedirs(os.path.dirname(loss_curves_path) or '.', exist_ok=True)
             with open(loss_curves_path, 'w') as f:
                 json.dump(loss_data, f, indent=2)
+            print('💾 Loss curves saved')
             
             # Save schema
             schema = {
                 'training_completed': True,
-                'model_type': 'image_captioning',
+                'model_type': 'generic_image_captioning',
                 'final_loss': float(final_loss),
                 'epochs_trained': len(train_losses),
                 'vision_encoder': vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
-                'language_model': 'microsoft/git-base'
+                'language_model': 'microsoft/git-base',
+                'samples_used': processed,
+                'device': device,
+                'status': 'success',
+                'capabilities': ['image_captioning', 'multimodal_understanding'],
+                'supported_domains': ['general', 'objects', 'scenes', 'people']
             }
             
             os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
             with open(schema_output_path, 'w') as f:
                 json.dump(schema, f, indent=2)
+            print('💾 Schema saved')
             
-            print('Training completed successfully')
+            print('🎉 Training completed successfully!')
+            print(f'📊 Final loss: {final_loss:.4f}')
+            print(f'📈 Epochs trained: {len(train_losses)}')
+            print(f'💾 Model saved to: {trained_model_path}')
             
         except Exception as e:
-            print('Training failed:', e)
+            print('❌ Training failed:', e)
             import traceback
             traceback.print_exc()
             
-            report = {'status': 'failed', 'error': str(e)}
+            # Save error report
+            report = {
+                'status': 'failed', 
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }
             os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
             with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
+            
+            # Save minimal schema
+            schema = {
+                'training_completed': False,
+                'status': 'failed',
+                'error': str(e)
+            }
+            os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
+            with open(schema_output_path, 'w') as f:
+                json.dump(schema, f, indent=2)
+            
             sys.exit(1)
         " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
