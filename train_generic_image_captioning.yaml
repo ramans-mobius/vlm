@@ -53,7 +53,7 @@ implementation:
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
         
-        # Get arguments from command line
+        # Get arguments from command line - SAME LAYOUT
         tokenizer_json_path = sys.argv[1]
         vision_encoder_config_path = sys.argv[2]
         model_config_path = sys.argv[3]
@@ -61,85 +61,89 @@ implementation:
         model_py_path = sys.argv[5]
         caption_dataset_path = sys.argv[6]
         dataset_metadata_path = sys.argv[7]
-        # training_params_str is now passed via environment variable
-        trained_model_path = sys.argv[8]
-        training_report_path = sys.argv[9]
-        loss_curves_path = sys.argv[10]
-        schema_output_path = sys.argv[11]
+        training_params_str = sys.argv[8]  # JSON string from user
+        trained_model_path = sys.argv[9]
+        training_report_path = sys.argv[10]
+        loss_curves_path = sys.argv[11]
+        schema_output_path = sys.argv[12]
 
         print('Starting generic image captioning training...')
-        
-        # CRITICAL FIX: Get training parameters from environment variable
-        # This avoids shell escaping issues with JSON strings
-        training_params_str = os.environ.get('TRAINING_PARAMS', '{}')
-        print('Training parameters string from env:', training_params_str)
+        print('Training parameters string:', training_params_str)
 
         # Load model config from parent brick (file path)
         with open(model_config_path, 'r') as f:
             model_config = json.load(f)
         print('Loaded model config from parent brick')
 
-        # Parse training parameters from JSON string - PROPERLY HANDLED
+        # FIXED: Better JSON parsing with escape sequence handling
         training_params = {}
         if training_params_str and training_params_str.strip() not in ['{}', '']:
             try:
-                # Direct JSON parsing without shell interference
+                # First, try direct parsing
                 training_params = json.loads(training_params_str)
-                print('Successfully parsed training parameters from JSON')
-                print('Parsed training parameters:', json.dumps(training_params, indent=2))
-            except json.JSONDecodeError as e:
-                print('WARN: Invalid training_parameters JSON: ' + str(e))
-                print('Raw training params string that failed:', repr(training_params_str))
-                training_params = {}
+                print('✅ Successfully parsed training parameters (direct)')
+            except json.JSONDecodeError as e1:
+                try:
+                    # If direct fails, it might have shell escapes - try unescaping
+                    import ast
+                    # Handle common escape sequences
+                    unescaped_str = training_params_str.encode('utf-8').decode('unicode_escape')
+                    training_params = json.loads(unescaped_str)
+                    print('✅ Successfully parsed training parameters (with unescaping)')
+                except (json.JSONDecodeError, UnicodeDecodeError, SyntaxError) as e2:
+                    try:
+                        # Last resort: try literal eval for complex cases
+                        training_params = ast.literal_eval(training_params_str)
+                        print('✅ Successfully parsed training parameters (with ast)')
+                    except (ValueError, SyntaxError) as e3:
+                        print('❌ WARN: All parsing attempts failed for training_parameters:')
+                        print('   Direct error:', e1)
+                        print('   Unescape error:', e2)
+                        print('   AST error:', e3)
+                        print('   Raw input:', repr(training_params_str))
+                        training_params = {}
         else:
-            print(' No training parameters provided, using defaults')
+            print('ℹ️ No training parameters provided, using defaults')
 
-        # Extract training parameters with user values taking priority
-        # User parameters OVERRIDE model config defaults
-        training_config = {
-            'learning_rate': training_params.get('learning_rate', 
-                                model_config.get('training_parameters', {}).get('learning_rate', 5e-5)),
-            'num_epochs': training_params.get('num_epochs', 
-                             model_config.get('training_parameters', {}).get('num_epochs', 10)),
-            'batch_size': training_params.get('batch_size', 
-                             model_config.get('training_parameters', {}).get('batch_size', 8)),
-            'max_train_samples': training_params.get('max_train_samples', 
-                                    model_config.get('training_parameters', {}).get('max_train_samples', 1000)),
-            'gradient_accumulation_steps': training_params.get('gradient_accumulation_steps', 
-                                            model_config.get('training_parameters', {}).get('gradient_accumulation_steps', 1)),
-            'validation_split': training_params.get('validation_split', 
-                                  model_config.get('training_parameters', {}).get('validation_split', 0.1)),
-            'weight_decay': training_params.get('weight_decay', 
-                               model_config.get('training_parameters', {}).get('weight_decay', 0.01)),
-            'warmup_steps': training_params.get('warmup_steps', 
-                               model_config.get('training_parameters', {}).get('warmup_steps', 100)),
-            'max_grad_norm': training_params.get('max_grad_norm', 
-                                model_config.get('training_parameters', {}).get('max_grad_norm', 1.0)),
-        }
+        print('Parsed training parameters:', json.dumps(training_params, indent=2))
+
+        # Extract training parameters with USER PRIORITY over defaults
+        learning_rate = training_params.get('learning_rate', 
+                          model_config.get('training_parameters', {}).get('learning_rate', 5e-5))
+        num_epochs = training_params.get('num_epochs', 
+                        model_config.get('training_parameters', {}).get('num_epochs', 10))
+        batch_size = training_params.get('batch_size', 
+                        model_config.get('training_parameters', {}).get('batch_size', 8))
+        max_train_samples = training_params.get('max_train_samples', 
+                              model_config.get('training_parameters', {}).get('max_train_samples', 1000))
+        gradient_accumulation_steps = training_params.get('gradient_accumulation_steps', 
+                                      model_config.get('training_parameters', {}).get('gradient_accumulation_steps', 1))
+        validation_split = training_params.get('validation_split', 
+                            model_config.get('training_parameters', {}).get('validation_split', 0.1))
+        
+        # Additional parameters that users might want to override
+        weight_decay = training_params.get('weight_decay', 
+                          model_config.get('training_parameters', {}).get('weight_decay', 0.01))
+        warmup_steps = training_params.get('warmup_steps', 
+                          model_config.get('training_parameters', {}).get('warmup_steps', 100))
+        max_grad_norm = training_params.get('max_grad_norm', 
+                            model_config.get('training_parameters', {}).get('max_grad_norm', 1.0))
         
         language_model_name = model_config.get('language_model_name', 'microsoft/git-base')
 
-        print('Final training configuration:')
-        for key, value in training_config.items():
-            print(f'   {key}: {value}')
-        print('   language_model: ' + language_model_name)
+        print('🎯 Final training parameters (USER VALUES USED):')
+        print('   Learning rate:', learning_rate, '(user)' if 'learning_rate' in training_params else '(default)')
+        print('   Num epochs:', num_epochs, '(user)' if 'num_epochs' in training_params else '(default)')
+        print('   Batch size:', batch_size, '(user)' if 'batch_size' in training_params else '(default)')
+        print('   Max train samples:', max_train_samples, '(user)' if 'max_train_samples' in training_params else '(default)')
+        print('   Gradient accumulation steps:', gradient_accumulation_steps, '(user)' if 'gradient_accumulation_steps' in training_params else '(default)')
+        print('   Validation split:', validation_split, '(user)' if 'validation_split' in training_params else '(default)')
+        print('   Weight decay:', weight_decay, '(user)' if 'weight_decay' in training_params else '(default)')
+        print('   Warmup steps:', warmup_steps, '(user)' if 'warmup_steps' in training_params else '(default)')
+        print('   Max grad norm:', max_grad_norm, '(user)' if 'max_grad_norm' in training_params else '(default)')
+        print('   Language model:', language_model_name)
 
-        # Load datasets
-        with open(caption_dataset_path, 'rb') as f:
-            caption_data = pickle.load(f)
-        
-        with open(dataset_metadata_path, 'rb') as f:
-            dataset_meta = pickle.load(f)
-
-        # Load vision encoder config
-        with open(vision_encoder_config_path, 'r') as f:
-            vision_config = json.load(f)
-
-        print('Training generic image captioning model on ' + str(len(caption_data)) + ' images')
-        print('Domain: ' + dataset_meta.get('caption_strategy', 'generic'))
-        print('Classes: ' + str(dataset_meta.get('detected_classes', ['various'])))
-
-r        try:
+        try:
             from nesy_factory.language_model.image_captioning_trainer import HFImageCaptioningTrainer
             print('Successfully imported HFImageCaptioningTrainer')
         except ImportError as e:
@@ -158,25 +162,37 @@ r        try:
             
             sys.exit(1)
 
+        # Load datasets
+        with open(caption_dataset_path, 'rb') as f:
+            caption_data = pickle.load(f)
+        
+        with open(dataset_metadata_path, 'rb') as f:
+            dataset_meta = pickle.load(f)
+
+        # Load vision encoder config
+        with open(vision_encoder_config_path, 'r') as f:
+            vision_config = json.load(f)
+
+        print('Training generic image captioning model on ' + str(len(caption_data)) + ' images')
+        print('Domain: ' + dataset_meta.get('caption_strategy', 'generic'))
+        print('Classes: ' + str(dataset_meta.get('detected_classes', ['various'])))
+
         # Initialize trainer
         trainer = HFImageCaptioningTrainer()
 
-        # Run training with user-provided parameters
+        # Run training with USER-PROVIDED parameters (not defaults)
         try:
-            print('Starting training with user parameters...')
             results = trainer.run(
                 vision_encoder_config=vision_config,
                 language_model_name=language_model_name,
                 dataset_name='generic_custom_dataset',
-                max_train_samples=min(training_config['max_train_samples'], len(caption_data)),
-                learning_rate=training_config['learning_rate'],
-                num_epochs=training_config['num_epochs'],
-                batch_size=training_config['batch_size'],
-                gradient_accumulation_steps=training_config['gradient_accumulation_steps'],
+                max_train_samples=min(max_train_samples, len(caption_data)),
+                learning_rate=learning_rate,  # Uses user value if provided
+                num_epochs=num_epochs,        # Uses user value if provided  
+                batch_size=batch_size,        # Uses user value if provided
+                gradient_accumulation_steps=gradient_accumulation_steps,  # Uses user value if provided
                 output_dir=os.path.dirname(trained_model_path) or '.'
-                # Add more parameters as needed
             )
-            print('Training completed successfully')
         except Exception as e:
             error_msg = f'Training failed: {str(e)}'
             print('ERROR: ' + error_msg)
@@ -197,9 +213,19 @@ r        try:
             'training_results': results,
             'model_saved': trained_model_path,
             'dataset_info': dataset_meta,
-            'training_parameters_used': training_config,
-            'user_provided_params': training_params,
-            'model_config_reference': model_config,
+            'training_parameters_used': {
+                'learning_rate': learning_rate,
+                'num_epochs': num_epochs,
+                'batch_size': batch_size,
+                'max_train_samples': max_train_samples,
+                'gradient_accumulation_steps': gradient_accumulation_steps,
+                'validation_split': validation_split,
+                'weight_decay': weight_decay,
+                'warmup_steps': warmup_steps,
+                'max_grad_norm': max_grad_norm
+            },
+            'user_provided_params': training_params,  # What user actually sent
+            'model_config_used': model_config,
             'domain_adaptability': 'high',
             'supported_image_types': dataset_meta.get('detected_classes', ['generic'])
         }
@@ -222,7 +248,7 @@ r        try:
 
         # Save schema
         schema = {
-            'training_parameters_used': training_config,
+            'training_parameters_used': training_summary['training_parameters_used'],
             'user_parameters_provided': training_params,
             'dataset_info': dataset_meta,
             'results_summary': {
@@ -247,12 +273,7 @@ r        try:
         print('Generic image captioning training completed!')
         print('Trained model saved to: ' + trained_model_path)
         print('Training report saved to: ' + training_report_path)
-        print('Loss curves saved to: ' + loss_curves_path)
-        print('Schema saved to: ' + schema_output_path)
-        "
-    env:
-      - name: TRAINING_PARAMS
-        value: {inputValue: training_parameters}
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11"
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: vision_encoder_config}
@@ -261,7 +282,7 @@ r        try:
       - {inputPath: model_py}
       - {inputPath: caption_dataset}
       - {inputPath: dataset_metadata}
-      # training_parameters removed from args, now passed via env
+      - {inputValue: training_parameters}
       - {outputPath: trained_model}
       - {outputPath: training_report}
       - {outputPath: loss_curves}
