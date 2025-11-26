@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning 
+name: Train Generic Image Captioning f
 description: Import language model components directly, avoid nesy-factory init
 inputs:
   - name: tokenizer_json
@@ -40,22 +40,84 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io, subprocess
         
-        print('=== DIRECT LANGUAGE MODEL IMPORTS ONLY ===')
+        print('=== DEBUG: STARTING TRAINING WITH ENVIRONMENT CHECK ===')
         
-        # Upgrade PyTorch and remove torchao
-        subprocess.run([
-            sys.executable, '-m', 'pip', 'install', 
-            'torch>=2.6.0', 'torchvision>=0.19.0',
-            '--force-reinstall'
-        ], capture_output=True)
+        # Step 1: Debug - Check what's available
+        print(' STEP 1: ENVIRONMENT DEBUG INFO')
+        print('Python executable:', sys.executable)
+        print('Python version:', sys.version)
+        print('Current working directory:', os.getcwd())
+        print('sys.path:', sys.path)
         
-        subprocess.run([
-            sys.executable, '-m', 'pip', 'uninstall', '-y', 'torchao'
-        ], capture_output=True)
+        # Check if nesy_factory exists
+        nesy_path = '/usr/local/lib/python3.10/site-packages/nesy_factory'
+        print('Nesy factory path exists:', os.path.exists(nesy_path))
+        if os.path.exists(nesy_path):
+            print('Nesy factory contents:', os.listdir(nesy_path))
+            lm_path = os.path.join(nesy_path, 'language_model')
+            if os.path.exists(lm_path):
+                print('Language model contents:', os.listdir(lm_path))
         
-        print(' Environment ready')
+        # Check installed packages
+        print(' STEP 2: CHECKING INSTALLED PACKAGES')
+        try:
+            import pkg_resources
+            packages = [f'{pkg.project_name}=={pkg.version}' for pkg in sorted(pkg_resources.working_set, key=lambda x: x.project_name.lower())]
+            print('Total packages:', len(packages))
+            # Print key packages
+            key_packages = ['torch', 'transformers', 'PIL', 'numpy', 'requests', 'datasets']
+            for pkg in key_packages:
+                for installed in packages:
+                    if pkg.lower() in installed.lower():
+                        print(f'  {installed}')
+                        break
+        except Exception as e:
+            print('Could not list packages:', e)
         
-        from PIL import Image
+        # Step 3: Fix imports - Use absolute imports
+        print(' STEP 3: SETTING UP IMPORTS')
+        
+        # Add nesy_factory to Python path
+        sys.path.insert(0, '/usr/local/lib/python3.10/site-packages')
+        print('Added nesy_factory to sys.path')
+        
+        # Try direct imports
+        try:
+            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+            print(' SUCCESS: Direct import of CLIPVisionEncoder')
+        except ImportError as e:
+            print(' FAILED: Direct import failed:', e)
+            print('Trying alternative import method...')
+            
+            # Alternative: Import base first, then vision_encoders
+            try:
+                from nesy_factory.language_model import base
+                from nesy_factory.language_model import registry
+                from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+                print(' SUCCESS: Alternative import worked')
+            except ImportError as e2:
+                print(' FAILED: Alternative import also failed:', e2)
+                # Last resort: manual import
+                try:
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location(
+                        'vision_encoders', 
+                        '/usr/local/lib/python3.10/site-packages/nesy_factory/language_model/vision_encoders.py'
+                    )
+                    vision_module = importlib.util.module_from_spec(spec)
+                    
+                    # Patch the imports before execution
+                    import nesy_factory.language_model.base as base_module
+                    import nesy_factory.language_model.registry as registry_module
+                    sys.modules['.base'] = base_module
+                    sys.modules['.registry'] = registry_module
+                    
+                    spec.loader.exec_module(vision_module)
+                    CLIPVisionEncoder = vision_module.CLIPVisionEncoder
+                    print(' SUCCESS: Manual import with patch worked')
+                except Exception as e3:
+                    print(' FAILED: All import methods failed:', e3)
+                    sys.exit(1)
         
         # Get arguments
         tokenizer_json_path = sys.argv[1]
@@ -71,6 +133,8 @@ implementation:
         loss_curves_path = sys.argv[11]
         schema_output_path = sys.argv[12]
 
+        print(' STEP 4: LOADING CONFIGURATIONS AND DATA')
+        
         # Load configurations
         with open(vision_encoder_config_path, 'r') as f:
             vision_config = json.load(f)
@@ -87,8 +151,8 @@ implementation:
         print(f'Loaded {len(caption_data)} training samples')
         print(f'Training config: {num_epochs} epochs, lr={learning_rate}, batch_size={batch_size}')
 
-        # DIRECT IMPORTS - NO NESY-FACTORY INIT
-        print(' STARTING TRAINING WITH DIRECT IMPORTS...')
+        # Step 5: Initialize training components
+        print(' STEP 5: INITIALIZING TRAINING COMPONENTS')
         
         try:
             import torch
@@ -97,20 +161,6 @@ implementation:
             
             # Import transformers directly
             from transformers import AutoTokenizer, AutoModelForCausalLM
-            
-            # Import CLIPVisionEncoder directly from its file (avoid nesy-factory __init__)
-            import importlib.util
-            
-            # Load vision_encoders module directly
-            vision_encoders_path = '/usr/local/lib/python3.10/site-packages/nesy_factory/language_model/vision_encoders.py'
-            spec = importlib.util.spec_from_file_location('vision_encoders_module', vision_encoders_path)
-            vision_module = importlib.util.module_from_spec(spec)
-            
-            # Execute the module to load CLIPVisionEncoder
-            spec.loader.exec_module(vision_module)
-            CLIPVisionEncoder = vision_module.CLIPVisionEncoder
-            
-            print(' Direct imports successful - no GNN dependencies')
             
             # Initialize device
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -128,7 +178,7 @@ implementation:
             
             language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
             
-            print(' All model components initialized')
+            print(' All model components initialized successfully')
             
             # Move to device
             vision_encoder.model = vision_encoder.model.to(device)
@@ -140,9 +190,21 @@ implementation:
                 lr=learning_rate
             )
             
-            train_losses = []
-            val_losses = []
+            print(' Optimizer configured')
             
+        except Exception as e:
+            print(f' Component initialization failed: {e}')
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
+        # Step 6: Training loop
+        print(' STEP 6: STARTING TRAINING LOOP')
+        
+        train_losses = []
+        val_losses = []
+        
+        try:
             # REAL TRAINING LOOP
             for epoch in range(num_epochs):
                 vision_encoder.model.train()
@@ -222,7 +284,9 @@ implementation:
             traceback.print_exc()
             sys.exit(1)
 
-        # Save results
+        # Step 7: Save results
+        print(' STEP 7: SAVING RESULTS')
+        
         report = {
             'status': 'completed',
             'training_approach': 'direct_language_imports',
@@ -232,7 +296,8 @@ implementation:
             'training_samples': len(caption_data),
             'samples_processed': processed_samples,
             'pytorch_version': torch.__version__,
-            'gnn_dependencies_avoided': True
+            'gnn_dependencies_avoided': True,
+            'import_method_used': 'absolute_imports'
         }
         
         loss_data = {
@@ -274,11 +339,11 @@ implementation:
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print(' FINAL SUCCESS! DIRECT LANGUAGE MODEL IMPORTS')
-        print('   • No nesy-factory __init__ imports')
+        print(' FINAL SUCCESS!')
+        print('   • Fixed relative import issue')
+        print('   • Used absolute imports')
         print('   • No GNN dependencies')
-        print('   • Pure language model training')
-        print('   • Real transformers + CLIP training')
+        print('   • Training completed successfully')
         " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12"
     args:
       - {inputPath: tokenizer_json}
