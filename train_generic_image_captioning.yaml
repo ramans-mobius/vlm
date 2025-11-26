@@ -1,4 +1,4 @@
-name: 3 Train Generic Image Captioning 
+name: Train Generic Image Captioning 
 description: Import language model components directly, avoid nesy-factory init
 inputs:
   - name: tokenizer_json
