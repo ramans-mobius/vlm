@@ -1,5 +1,5 @@
-name: 2 Train Generic Image Captioning
-description: Simple image captioning training using nesy_factory components
+name: Train Generic Image Captioning
+description: Image captioning training with compatible library versions
 inputs:
   - name: tokenizer_json
     type: Model
@@ -15,6 +15,10 @@ outputs:
     type: Model
   - name: training_report
     type: Data
+  - name: loss_curves
+    type: Data
+  - name: schema_json
+    type: Data
 implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
@@ -25,12 +29,18 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io
         
+        # Install compatible versions first
+        import subprocess
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0', 'torchvision==0.16.0', 'transformers==4.37.2', '--force-reinstall'], capture_output=True)
+        
         tokenizer_json_path = sys.argv[1]
         vision_encoder_config_path = sys.argv[2]
         caption_dataset_path = sys.argv[3]
         training_params_str = sys.argv[4]
         trained_model_path = sys.argv[5]
         training_report_path = sys.argv[6]
+        loss_curves_path = sys.argv[7]
+        schema_output_path = sys.argv[8]
         
         with open(vision_encoder_config_path, 'r') as f:
             vision_config = json.load(f)
@@ -40,8 +50,11 @@ implementation:
         
         training_params = json.loads(training_params_str)
         num_epochs = training_params.get('epochs', 1)
+        learning_rate = training_params.get('learning_rate', 5e-5)
+        batch_size = training_params.get('batch_size', 4)
         
-        print('Training for', num_epochs, 'epochs with', len(caption_data), 'samples')
+        print('Training config:', num_epochs, 'epochs, lr=', learning_rate, 'batch_size=', batch_size)
+        print('Loaded', len(caption_data), 'training samples')
         
         try:
             import torch
@@ -51,6 +64,7 @@ implementation:
             from PIL import Image
             
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print('Using device:', device)
             
             vision_encoder = CLIPVisionEncoder(
                 model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
@@ -65,7 +79,7 @@ implementation:
             
             optimizer = torch.optim.AdamW(
                 list(vision_encoder.model.parameters()) + list(language_model.parameters()),
-                lr=5e-5
+                lr=learning_rate
             )
             
             train_losses = []
@@ -111,30 +125,59 @@ implementation:
                             epoch_loss += loss.item()
                             processed += 1
                             
+                            if processed % 20 == 0:
+                                print(f'Processed {processed} samples, current loss: {loss.item():.4f}')
+                                
                         except Exception as e:
                             continue
                 
                 if processed > 0:
                     avg_loss = epoch_loss / processed
                     train_losses.append(avg_loss)
-                    print(f'Epoch {epoch+1}: loss={avg_loss:.4f}, samples={processed}')
+                    print(f'Epoch {epoch+1}: average loss={avg_loss:.4f}, samples={processed}')
             
             final_loss = train_losses[-1] if train_losses else 0.0
             
+            # Save model
+            os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
+            torch.save(language_model.state_dict(), trained_model_path)
+            
+            # Save training report
             report = {
                 'status': 'success',
                 'epochs_completed': len(train_losses),
                 'final_loss': float(final_loss),
                 'samples_processed': processed,
-                'total_samples': len(caption_data)
+                'total_samples': len(caption_data),
+                'device_used': device,
+                'torch_version': torch.__version__
             }
-            
-            os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
-            torch.save(language_model.state_dict(), trained_model_path)
             
             os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
             with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
+            
+            # Save loss curves
+            loss_data = {
+                'epochs': list(range(1, len(train_losses) + 1)),
+                'train_loss': [float(loss) for loss in train_losses]
+            }
+            
+            os.makedirs(os.path.dirname(loss_curves_path) or '.', exist_ok=True)
+            with open(loss_curves_path, 'w') as f:
+                json.dump(loss_data, f, indent=2)
+            
+            # Save schema
+            schema = {
+                'training_completed': True,
+                'model_type': 'image_captioning',
+                'final_loss': float(final_loss),
+                'epochs_trained': len(train_losses)
+            }
+            
+            os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
+            with open(schema_output_path, 'w') as f:
+                json.dump(schema, f, indent=2)
             
             print('Training completed successfully')
             
@@ -148,7 +191,7 @@ implementation:
             with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
             sys.exit(1)
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: vision_encoder_config}
@@ -156,3 +199,5 @@ implementation:
       - {inputValue: training_parameters}
       - {outputPath: trained_model}
       - {outputPath: training_report}
+      - {outputPath: loss_curves}
+      - {outputPath: schema_json}
