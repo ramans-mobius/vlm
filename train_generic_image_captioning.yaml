@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning 2
+name: 3 Train Generic Image Captioning 
 description: Import language model components directly, avoid nesy-factory init
 inputs:
   - name: tokenizer_json
@@ -99,12 +99,15 @@ implementation:
                 import torch
                 import torch.nn as nn
                 from transformers import AutoTokenizer, AutoModelForCausalLM
+                from nesy_factory.language_model.image_tokenizer import HFTokenizer
                 from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
                 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                vision_encoder = CLIPVisionEncoder(model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'), projection_dim=vision_config.get('projection_dim', 512))
-                tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
+                vision_encoder = CLIPVisionEncoder(
+                    model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
+                    projection_dim=vision_config.get('projection_dim', 512)
+                )
+                tokenizer = HFTokenizer()
+                tokenizer.run(tokenizer_name="microsoft/git-base")
                 language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
                 vision_encoder.model = vision_encoder.model.to(device)
                 language_model = language_model.to(device)
@@ -123,7 +126,7 @@ implementation:
                                 image_bytes = base64.b64decode(sample['image_data'])
                                 image = Image.open(io.BytesIO(image_bytes))
                                 image_features = vision_encoder.run([image])
-                                inputs = tokenizer(sample['caption'], return_tensors='pt', max_length=128, padding='max_length', truncation=True)
+                                inputs = tokenizer.tokenizer(sample['caption'], return_tensors='pt', max_length=128, padding='max_length', truncation=True)
                                 input_ids = inputs['input_ids'].to(device)
                                 attention_mask = inputs['attention_mask'].to(device)
                                 text_embeddings = language_model.get_input_embeddings()(input_ids)
