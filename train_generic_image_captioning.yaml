@@ -1,4 +1,4 @@
-name: 3 Train Generic Image Captioning
+name: Train Generic Image Captioning
 description: Trains a generic image captioning model suitable for any domain using nesy-factory components.
 inputs:
   - name: tokenizer_json
@@ -35,8 +35,18 @@ implementation:
       - sh
       - -c
       - |
+        # INSTALL COMPATIBLE TORCH VERSIONS AT RUNTIME
+        echo "Installing compatible torch versions..."
+        pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+        pip install transformers==4.35.2
+        pip install torchao==0.1.0 --no-deps  # Install without dependencies to avoid conflicts
+        
+        echo "Starting training with compatible versions..."
         python3 -c "
         import sys, os, json, pickle, torch
+        
+        print('Torch version:', torch.__version__)
+        print('CUDA available:', torch.cuda.is_available())
         
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
