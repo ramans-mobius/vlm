@@ -1,23 +1,12 @@
-name: Train Generic Image Captioning 
-description: Import language model components directly, avoid nesy-factory init
+name: 2 Train Generic Image Captioning
+description: Simple image captioning training using nesy_factory components
 inputs:
   - name: tokenizer_json
     type: Model
   - name: vision_encoder_config
     type: Data
-  - name: model_config
-    type: Data
-    default: "{}"
-  - name: model_weights
-    type: Model
-    default: "{}"
-  - name: model_py
-    type: Data
-    default: "{}"
   - name: caption_dataset
     type: Dataset
-  - name: dataset_metadata
-    type: DatasetInfo
   - name: training_parameters
     type: String
     default: "{}"
@@ -25,188 +14,145 @@ outputs:
   - name: trained_model
     type: Model
   - name: training_report
-  - name: loss_curves
-  - name: schema_json
+    type: Data
 implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
     command:
-      - bash
-      - -eu
+      - sh
       - -c
-      - |-
-        set -o pipefail
-        echo "[DEBUG] shell received args: $*"
-        cat >/tmp/train_image_captioning.py <<'PY'
-        import argparse, json, os, sys, pickle, base64, io, subprocess
-        from pathlib import Path
-        DEFAULTS = {
-            "tokenizer_json": "/tmp/inputs/tokenizer_json/data",
-            "vision_encoder_config": "/tmp/inputs/vision_encoder_config/data", 
-            "model_config": "/tmp/inputs/model_config/data",
-            "model_weights": "/tmp/inputs/model_weights/data",
-            "model_py": "/tmp/inputs/model_py/data",
-            "caption_dataset": "/tmp/inputs/caption_dataset/data",
-            "dataset_metadata": "/tmp/inputs/dataset_metadata/data",
-            "trained_model": "/tmp/outputs/trained_model/data",
-            "training_report": "/tmp/outputs/training_report/data",
-            "loss_curves": "/tmp/outputs/loss_curves/data",
-            "schema_output": "/tmp/outputs/schema_json/data",
-        }
-        def _exist(p): return Path(p).exists()
-        def main():
-            print("[DEBUG] sys.argv:", sys.argv, flush=True)
-            ap = argparse.ArgumentParser()
-            ap.add_argument("--tokenizer-json", default=None)
-            ap.add_argument("--vision-encoder-config", default=None)
-            ap.add_argument("--model-config", default=None)
-            ap.add_argument("--model-weights", default=None)
-            ap.add_argument("--model-py", default=None)
-            ap.add_argument("--caption-dataset", default=None)
-            ap.add_argument("--dataset-metadata", default=None)
-            ap.add_argument("--training-parameters", default="{}")
-            ap.add_argument("--trained-model", default=None)
-            ap.add_argument("--training-report", default=None)
-            ap.add_argument("--loss-curves", default=None)
-            ap.add_argument("--schema-output", default=None)
-            args = ap.parse_args()
-            for k in ("tokenizer_json","vision_encoder_config","model_config","model_weights","model_py",
-                      "caption_dataset","dataset_metadata",
-                      "trained_model","training_report","loss_curves","schema_output"):
-                if getattr(args, k.replace("-", "_")) in (None, ""):
-                    setattr(args, k.replace("-", "_"), DEFAULTS[k])
-            print("[DEBUG] resolved paths:")
-            for k in ("tokenizer_json","vision_encoder_config","model_config","model_weights","model_py",
-                      "caption_dataset","dataset_metadata",
-                      "trained_model","training_report","loss_curves","schema_output"):
-                v = getattr(args, k.replace("-", "_"))
-                print(f"  {k:20s} -> {v} (exists={_exist(v)})")
-            print(f"  training_parameters  -> {args.training_parameters}")
-            subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch>=2.6.0', 'torchvision>=0.19.0', '--force-reinstall'], capture_output=True)
-            subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'torchao'], capture_output=True)
+      - |
+        python3 -c "
+        import sys, os, json, pickle, base64, io
+        
+        tokenizer_json_path = sys.argv[1]
+        vision_encoder_config_path = sys.argv[2]
+        caption_dataset_path = sys.argv[3]
+        training_params_str = sys.argv[4]
+        trained_model_path = sys.argv[5]
+        training_report_path = sys.argv[6]
+        
+        with open(vision_encoder_config_path, 'r') as f:
+            vision_config = json.load(f)
+        
+        with open(caption_dataset_path, 'rb') as f:
+            caption_data = pickle.load(f)
+        
+        training_params = json.loads(training_params_str)
+        num_epochs = training_params.get('epochs', 1)
+        
+        print('Training for', num_epochs, 'epochs with', len(caption_data), 'samples')
+        
+        try:
+            import torch
+            from nesy_factory.language_model.image_tokenizer import HFTokenizer
+            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
+            from transformers import AutoModelForCausalLM
             from PIL import Image
-            with open(args.vision_encoder_config, 'r') as f:
-                vision_config = json.load(f)
-            with open(args.caption_dataset, 'rb') as f:
-                caption_data = pickle.load(f)
-            training_params = json.loads(args.training_parameters)
-            num_epochs = training_params.get('epochs', 3)
-            learning_rate = training_params.get('learning_rate', 5e-5)
-            batch_size = training_params.get('batch_size', 4)
-            print('Loaded training samples:', len(caption_data))
-            print('Training config:', num_epochs, 'epochs, lr=', learning_rate, 'batch_size=', batch_size)
-            try:
-                import torch
-                import torch.nn as nn
-                from transformers import AutoTokenizer, AutoModelForCausalLM
-                from nesy_factory.language_model.image_tokenizer import HFTokenizer
-                from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                vision_encoder = CLIPVisionEncoder(
-                    model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
-                    projection_dim=vision_config.get('projection_dim', 512)
-                )
-                tokenizer = HFTokenizer()
-                tokenizer.run(tokenizer_name="microsoft/git-base")
-                language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
-                vision_encoder.model = vision_encoder.model.to(device)
-                language_model = language_model.to(device)
-                optimizer = torch.optim.AdamW(list(vision_encoder.model.parameters()) + list(language_model.parameters()), lr=learning_rate)
-                train_losses = []
-                val_losses = []
-                for epoch in range(num_epochs):
-                    vision_encoder.model.train()
-                    language_model.train()
-                    epoch_train_loss = 0.0
-                    processed_samples = 0
-                    for i, sample in enumerate(caption_data):
-                        if 'image_data' in sample and 'caption' in sample:
-                            try:
-                                optimizer.zero_grad()
-                                image_bytes = base64.b64decode(sample['image_data'])
-                                image = Image.open(io.BytesIO(image_bytes))
-                                image_features = vision_encoder.run([image])
-                                inputs = tokenizer.tokenizer(sample['caption'], return_tensors='pt', max_length=128, padding='max_length', truncation=True)
-                                input_ids = inputs['input_ids'].to(device)
-                                attention_mask = inputs['attention_mask'].to(device)
-                                text_embeddings = language_model.get_input_embeddings()(input_ids)
-                                image_features_expanded = image_features.unsqueeze(1).to(device)
-                                fused_embeddings = text_embeddings + image_features_expanded
-                                outputs = language_model(inputs_embeds=fused_embeddings, attention_mask=attention_mask, labels=input_ids)
-                                loss = outputs.loss
-                                loss.backward()
-                                optimizer.step()
-                                epoch_train_loss += loss.item()
-                                processed_samples += 1
-                                if (i + 1) % 20 == 0:
-                                    print('Processed', i+1, '/', len(caption_data), '- Loss:', loss.item())
-                            except Exception as e:
-                                print('Sample', i, 'failed:', e)
-                                continue
-                    if processed_samples > 0:
-                        avg_train_loss = epoch_train_loss / processed_samples
-                        train_losses.append(avg_train_loss)
-                        avg_val_loss = avg_train_loss * 1.1
-                        val_losses.append(avg_val_loss)
-                        print('Epoch', epoch+1, '/', num_epochs, ': train_loss=', avg_train_loss, ', val_loss=', avg_val_loss, ', samples=', processed_samples)
-                    else:
-                        print('Epoch', epoch+1, '/', num_epochs, ': No samples processed')
-                final_train_loss = train_losses[-1] if train_losses else 0.0
-                final_val_loss = val_losses[-1] if val_losses else 0.0
-                print('TRAINING COMPLETED -', processed_samples, 'samples processed')
-            except Exception as e:
-                print('TRAINING FAILED:', e)
-                import traceback
-                traceback.print_exc()
-                sys.exit(1)
-            report = {'status': 'completed', 'training_approach': 'direct_language_imports', 'epochs_completed': len(train_losses), 'final_train_loss': float(final_train_loss), 'final_val_loss': float(final_val_loss), 'training_samples': len(caption_data), 'samples_processed': processed_samples, 'pytorch_version': torch.__version__, 'gnn_dependencies_avoided': True}
-            loss_data = {'epochs': list(range(1, len(train_losses) + 1)), 'train_loss': [float(loss) for loss in train_losses], 'val_loss': [float(loss) for loss in val_losses]}
-            os.makedirs(os.path.dirname(args.trained_model) or '.', exist_ok=True)
-            with open(args.trained_model, 'w') as f:
-                json.dump({'model_type': 'image_captioning', 'training_completed': True, 'final_val_loss': float(final_val_loss), 'epochs_trained': len(train_losses), 'gnn_dependencies_avoided': True}, f, indent=2)
-            os.makedirs(os.path.dirname(args.training_report) or '.', exist_ok=True)
-            with open(args.training_report, 'w') as f:
+            
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            
+            vision_encoder = CLIPVisionEncoder(
+                model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
+                projection_dim=vision_config.get('projection_dim', 512)
+            )
+            
+            tokenizer = HFTokenizer()
+            tokenizer.run(tokenizer_name='microsoft/git-base')
+            
+            language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
+            language_model = language_model.to(device)
+            
+            optimizer = torch.optim.AdamW(
+                list(vision_encoder.model.parameters()) + list(language_model.parameters()),
+                lr=5e-5
+            )
+            
+            train_losses = []
+            
+            for epoch in range(num_epochs):
+                epoch_loss = 0.0
+                processed = 0
+                
+                for i, sample in enumerate(caption_data):
+                    if 'image_data' in sample and 'caption' in sample:
+                        try:
+                            optimizer.zero_grad()
+                            
+                            image_bytes = base64.b64decode(sample['image_data'])
+                            image = Image.open(io.BytesIO(image_bytes))
+                            image_features = vision_encoder.run([image])
+                            
+                            inputs = tokenizer.tokenizer(
+                                sample['caption'], 
+                                return_tensors='pt', 
+                                max_length=128, 
+                                padding='max_length', 
+                                truncation=True
+                            )
+                            
+                            input_ids = inputs['input_ids'].to(device)
+                            attention_mask = inputs['attention_mask'].to(device)
+                            
+                            text_embeddings = language_model.get_input_embeddings()(input_ids)
+                            image_features_expanded = image_features.unsqueeze(1).to(device)
+                            fused_embeddings = text_embeddings + image_features_expanded
+                            
+                            outputs = language_model(
+                                inputs_embeds=fused_embeddings,
+                                attention_mask=attention_mask,
+                                labels=input_ids
+                            )
+                            
+                            loss = outputs.loss
+                            loss.backward()
+                            optimizer.step()
+                            
+                            epoch_loss += loss.item()
+                            processed += 1
+                            
+                        except Exception as e:
+                            continue
+                
+                if processed > 0:
+                    avg_loss = epoch_loss / processed
+                    train_losses.append(avg_loss)
+                    print(f'Epoch {epoch+1}: loss={avg_loss:.4f}, samples={processed}')
+            
+            final_loss = train_losses[-1] if train_losses else 0.0
+            
+            report = {
+                'status': 'success',
+                'epochs_completed': len(train_losses),
+                'final_loss': float(final_loss),
+                'samples_processed': processed,
+                'total_samples': len(caption_data)
+            }
+            
+            os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
+            torch.save(language_model.state_dict(), trained_model_path)
+            
+            os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
+            with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
-            os.makedirs(os.path.dirname(args.loss_curves) or '.', exist_ok=True)
-            with open(args.loss_curves, 'w') as f:
-                json.dump(loss_data, f, indent=2)
-            schema_list = []
-            for i, (train_loss, val_loss) in enumerate(zip(train_losses, val_losses), 1):
-                schema_list.append({'epoch': i, 'loss': float(train_loss), 'validation_loss': float(val_loss)})
-            schema_out = args.schema_output
-            if os.path.isdir(schema_out):
-                schema_out = os.path.join(schema_out, "schema.json")
-            os.makedirs(os.path.dirname(schema_out) or '.', exist_ok=True)
-            with open(schema_out, "w", encoding="utf-8") as f:
-                json.dump(schema_list, f, indent=2)
-            print(f"[DONE] Schema JSON written with {len(schema_list)} entries")
-        if __name__ == "__main__":
-            main()
-        PY
-        python3 -u /tmp/train_image_captioning.py "$@"
-      - _
+            
+            print('Training completed successfully')
+            
+        except Exception as e:
+            print('Training failed:', e)
+            import traceback
+            traceback.print_exc()
+            
+            report = {'status': 'failed', 'error': str(e)}
+            os.makedirs(os.path.dirname(training_report_path) or '.', exist_ok=True)
+            with open(training_report_path, 'w') as f:
+                json.dump(report, f, indent=2)
+            sys.exit(1)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
     args:
-      - --tokenizer-json
       - {inputPath: tokenizer_json}
-      - --vision-encoder-config
       - {inputPath: vision_encoder_config}
-      - --model-config
-      - {inputPath: model_config}
-      - --model-weights
-      - {inputPath: model_weights}
-      - --model-py
-      - {inputPath: model_py}
-      - --caption-dataset
       - {inputPath: caption_dataset}
-      - --dataset-metadata
-      - {inputPath: dataset_metadata}
-      - --training-parameters
       - {inputValue: training_parameters}
-      - --trained-model
       - {outputPath: trained_model}
-      - --training-report
       - {outputPath: training_report}
-      - --loss-curves
-      - {outputPath: loss_curves}
-      - --schema-output
-      - {outputPath: schema_json}
