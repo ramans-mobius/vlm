@@ -1,4 +1,4 @@
-name: Train Generic Image Captioning
+name: Train Generic Image Captioning 
 description: Import language model components directly, avoid nesy-factory init
 inputs:
   - name: tokenizer_json
@@ -29,7 +29,7 @@ outputs:
   - name: loss_curves
     type: Data
   - name: schema_json
-  - type: Data
+    type: Data
 implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v29
@@ -100,7 +100,6 @@ implementation:
             
             # Import CLIPVisionEncoder directly from its file (avoid nesy-factory __init__)
             import importlib.util
-            import types
             
             # Load vision_encoders module directly
             vision_encoders_path = '/usr/local/lib/python3.10/site-packages/nesy_factory/language_model/vision_encoders.py'
