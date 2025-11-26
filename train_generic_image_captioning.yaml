@@ -29,9 +29,9 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io
         
-        # Install compatible versions first - FIX numpy compatibility
+        # Install compatible versions first - matching your environment
         import subprocess
-        subprocess.run([sys.executable, '-m', 'pip', 'install', 'numpy<2', '--force-reinstall'], capture_output=True)
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'numpy==1.26.4', '--force-reinstall'], capture_output=True)
         subprocess.run([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0', 'torchvision==0.16.0', 'transformers==4.37.2', '--force-reinstall'], capture_output=True)
         
         tokenizer_json_path = sys.argv[1]
@@ -71,17 +71,22 @@ implementation:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             print('Using device:', device)
             
+            # Initialize vision encoder
             vision_encoder = CLIPVisionEncoder(
                 model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
                 projection_dim=vision_config.get('projection_dim', 512)
             )
+            vision_encoder.model = vision_encoder.model.to(device)
             
+            # Initialize tokenizer
             tokenizer = HFTokenizer()
             tokenizer.run(tokenizer_name='microsoft/git-base')
             
+            # Initialize language model
             language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
             language_model = language_model.to(device)
             
+            # Setup optimizer
             optimizer = torch.optim.AdamW(
                 list(vision_encoder.model.parameters()) + list(language_model.parameters()),
                 lr=learning_rate
@@ -89,6 +94,7 @@ implementation:
             
             train_losses = []
             
+            # Training loop
             for epoch in range(num_epochs):
                 epoch_loss = 0.0
                 processed = 0
@@ -98,10 +104,12 @@ implementation:
                         try:
                             optimizer.zero_grad()
                             
+                            # Process image
                             image_bytes = base64.b64decode(sample['image_data'])
                             image = Image.open(io.BytesIO(image_bytes))
                             image_features = vision_encoder.run([image])
                             
+                            # Process caption text
                             inputs = tokenizer.tokenizer(
                                 sample['caption'], 
                                 return_tensors='pt', 
@@ -113,10 +121,25 @@ implementation:
                             input_ids = inputs['input_ids'].to(device)
                             attention_mask = inputs['attention_mask'].to(device)
                             
+                            # Fuse image and text features
                             text_embeddings = language_model.get_input_embeddings()(input_ids)
                             image_features_expanded = image_features.unsqueeze(1).to(device)
+                            
+                            # Ensure dimensions match for fusion
+                            if image_features_expanded.shape[1] < text_embeddings.shape[1]:
+                                # Pad image features to match text sequence length
+                                padding = text_embeddings.shape[1] - image_features_expanded.shape[1]
+                                image_features_expanded = torch.nn.functional.pad(
+                                    image_features_expanded, 
+                                    (0, 0, 0, padding)
+                                )
+                            elif image_features_expanded.shape[1] > text_embeddings.shape[1]:
+                                # Truncate image features to match text sequence length
+                                image_features_expanded = image_features_expanded[:, :text_embeddings.shape[1], :]
+                            
                             fused_embeddings = text_embeddings + image_features_expanded
                             
+                            # Forward pass
                             outputs = language_model(
                                 inputs_embeds=fused_embeddings,
                                 attention_mask=attention_mask,
@@ -134,6 +157,7 @@ implementation:
                                 print(f'Processed {processed} samples, current loss: {loss.item():.4f}')
                                 
                         except Exception as e:
+                            print(f'Error processing sample {i}: {e}')
                             continue
                 
                 if processed > 0:
@@ -145,7 +169,11 @@ implementation:
             
             # Save model
             os.makedirs(os.path.dirname(trained_model_path) or '.', exist_ok=True)
-            torch.save(language_model.state_dict(), trained_model_path)
+            torch.save({
+                'language_model_state_dict': language_model.state_dict(),
+                'vision_encoder_config': vision_config,
+                'training_params': training_params
+            }, trained_model_path)
             
             # Save training report
             report = {
@@ -178,7 +206,9 @@ implementation:
                 'training_completed': True,
                 'model_type': 'image_captioning',
                 'final_loss': float(final_loss),
-                'epochs_trained': len(train_losses)
+                'epochs_trained': len(train_losses),
+                'vision_encoder': vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
+                'language_model': 'microsoft/git-base'
             }
             
             os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
@@ -197,7 +227,7 @@ implementation:
             with open(training_report_path, 'w') as f:
                 json.dump(report, f, indent=2)
             sys.exit(1)
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+        " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: vision_encoder_config}
