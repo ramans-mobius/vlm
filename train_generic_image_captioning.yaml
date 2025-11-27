@@ -1,5 +1,5 @@
-name: Train Generic Image Captioning COMPATIBLE
-description: Training with exact version matching
+name: 2 Train Generic Image Captioning 
+description: Training with exact version matching 
 inputs:
   - name: tokenizer_json
     type: Model
@@ -96,6 +96,10 @@ implementation:
                 with open(dataset_input, 'rb') as f:
                     caption_data = pickle.load(f)
                 print(f'Loaded {len(caption_data)} samples')
+                # Debug: show sample data structure
+                if caption_data:
+                    print(f'Sample data keys: {list(caption_data[0].keys())}')
+                    print(f'Sample caption: {caption_data[0].get(\\\"caption\\\", \\\"NO_CAPTION\\\")}')
         except Exception as e:
             print(f'Dataset load failed: {e}')
         
@@ -108,7 +112,8 @@ implementation:
             from transformers import AutoTokenizer, AutoModelForCausalLM, CLIPProcessor, CLIPModel
             
             print('Loading tokenizer...')
-            tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
+            # Load tokenizer from the provided path (directory)
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_input)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
             
@@ -129,7 +134,7 @@ implementation:
                 def __init__(self, model, processor, vision_dim, text_dim):
                     self.model = model
                     self.processor = processor
-                    self.projection = nn.Linear(vision_dim, text_dim)
+                    self.projection = nn.Linear(vision_dim, text_dim).to(device)
                 
                 def run(self, images):
                     if not isinstance(images, list):
@@ -141,7 +146,6 @@ implementation:
                     return self.projection(features)
             
             vision_encoder = FixedVisionEncoder(clip_model, clip_processor, vision_dim, text_dim)
-            vision_encoder.projection = vision_encoder.projection.to(device)
             
             print('All components loaded successfully!')
             
@@ -179,35 +183,39 @@ implementation:
                             image = Image.open(io.BytesIO(image_bytes))
                             if image.mode != 'RGB':
                                 image = image.convert('RGB')
-                            image_features = vision_encoder.run([image])
+                            image_features = vision_encoder.run([image])  # Shape: [1, text_dim]
                         except Exception as e:
                             print(f'Image processing failed for sample {i}: {e}')
                             continue
                         
-                        # Tokenize
+                        # Tokenize - FIXED: Use proper tokenization
+                        caption = sample.get('caption', '')
+                        if not caption:
+                            print(f'Sample {i} has no caption, skipping')
+                            continue
+                            
                         inputs = tokenizer(
-                            sample['caption'],
+                            caption,
                             return_tensors='pt',
                             max_length=128,
                             padding='max_length',
-                            truncation=True
+                            truncation=True,
+                            return_attention_mask=True
                         )
                         
-                        input_ids = inputs['input_ids'].to(device)
-                        attention_mask = inputs.get('attention_mask', torch.ones_like(input_ids)).to(device)
+                        input_ids = inputs['input_ids'].to(device)  # Shape: [1, seq_len]
+                        attention_mask = inputs['attention_mask'].to(device)
                         
-                        # Fuse features - FIX BATCH SIZE ISSUE
-                        text_embeddings = language_model.get_input_embeddings()(input_ids)
-                        image_features_expanded = image_features.unsqueeze(1)
+                        # Get text embeddings
+                        text_embeddings = language_model.get_input_embeddings()(input_ids)  # Shape: [1, seq_len, text_dim]
                         
-                        # Ensure exact shape matching
-                        if image_features_expanded.shape[1] < text_embeddings.shape[1]:
-                            padding = text_embeddings.shape[1] - image_features_expanded.shape[1]
-                            image_features_expanded = torch.nn.functional.pad(
-                                image_features_expanded, (0, 0, 0, padding, 0, 0)
-                            )
+                        # FIXED: Simple feature fusion - replace first token with image features
+                        batch_size, seq_len, hidden_dim = text_embeddings.shape
+                        image_features_expanded = image_features.unsqueeze(1)  # [1, 1, text_dim]
                         
-                        fused_embeddings = text_embeddings + image_features_expanded
+                        # Replace first token embedding with image features
+                        fused_embeddings = text_embeddings.clone()
+                        fused_embeddings[:, 0:1, :] = image_features_expanded
                         
                         # Forward pass
                         outputs = language_model(
@@ -217,18 +225,23 @@ implementation:
                         )
                         
                         loss = outputs.loss
-                        loss.backward()
-                        optimizer.step()
                         
-                        epoch_loss += loss.item()
-                        processed += 1
-                        
-                        if processed % 20 == 0:
-                            print(f'Epoch {epoch+1}, sample {processed}, loss: {loss.item():.4f}')
+                        # Only backward if loss is valid
+                        if not torch.isnan(loss) and not torch.isinf(loss):
+                            loss.backward()
+                            optimizer.step()
+                            epoch_loss += loss.item()
+                            processed += 1
+                            
+                            if processed % 20 == 0:
+                                print(f'Epoch {epoch+1}, sample {processed}, loss: {loss.item():.4f}')
+                        else:
+                            print(f'Sample {i} produced invalid loss: {loss}')
                             
                     except Exception as e:
-                        if processed < 10:  # Only show first few errors
-                            print(f'Sample {i} failed: {e}')
+                        print(f'Sample {i} failed: {e}')
+                        import traceback
+                        traceback.print_exc()
                         continue
                 
                 if processed > 0:
@@ -248,7 +261,8 @@ implementation:
                 'vision_config': vision_config,
                 'training_params': training_params,
                 'final_loss': final_loss,
-                'epochs_trained': len(train_losses)
+                'epochs_trained': len(train_losses),
+                'tokenizer_path': tokenizer_input
             }, model_output)
             
             report = {
@@ -280,7 +294,8 @@ implementation:
                 'training_completed': True,
                 'model_type': 'image_captioning',
                 'final_loss': float(final_loss),
-                'epochs_trained': len(train_losses)
+                'epochs_trained': len(train_losses),
+                'samples_processed': processed
             }
             
             with open(schema_output, 'w') as f:
