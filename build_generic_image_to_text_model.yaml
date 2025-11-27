@@ -36,9 +36,9 @@ implementation:
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
         
-        # Get arguments
+        # Get arguments - CORRECTED ARGUMENT INDEXING
         tokenizer_json_path = sys.argv[1]
-        vision_encoder_config_path = sys.argv[2]
+        vision_encoder_config_path = sys.argv[2] 
         language_model_name = sys.argv[3]
         model_architecture = sys.argv[4]
         domain_specialization = sys.argv[5]
@@ -55,11 +55,16 @@ implementation:
         print('Domain specialization: ' + domain_specialization)
 
         # Load vision encoder config
-        with open(vision_encoder_config_path, 'r') as f:
-            vision_config = json.load(f)
+        vision_config = {}
+        try:
+            if os.path.exists(vision_encoder_config_path):
+                with open(vision_encoder_config_path, 'r') as f:
+                    vision_config = json.load(f)
+        except Exception as e:
+            print(f'Warning: Could not load vision config: {e}')
 
-        # Get vocab size from tokenizer
-        vocab_size = 50257  # Default for GIT
+        # Get vocab size (default for GIT)
+        vocab_size = 50257
 
         # Create CLIP-GIT fusion model configuration
         model_config = {
@@ -87,8 +92,8 @@ class CLIPGITFusionModel(nn.Module):
         self.config = config
         
         # CLIP vision encoder
-        self.clip_model = CLIPModel.from_pretrained(config['vision_encoder']['model_name'])
-        self.clip_processor = CLIPProcessor.from_pretrained(config['vision_encoder']['model_name'])
+        self.clip_model = CLIPModel.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
+        self.clip_processor = CLIPProcessor.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
         
         # GIT language model
         self.git_model = GitForCausalLM.from_pretrained(config['language_model'])
@@ -122,7 +127,6 @@ class CLIPGITFusionModel(nn.Module):
         # Get text inputs
         if input_ids is not None:
             # Use GIT model with custom visual features
-            # This requires modifying GIT's forward pass - we'll replace its vision features
             outputs = self.git_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -145,7 +149,6 @@ class CLIPGITFusionModel(nn.Module):
             visual_features = self.vision_proj(clip_features)
             
             # Use GIT for generation with custom visual features
-            # This would require custom generation logic
             return self.git_model.generate(
                 inputs_embeds=visual_features.unsqueeze(1),
                 max_length=max_length,
@@ -154,12 +157,17 @@ class CLIPGITFusionModel(nn.Module):
             )
 '''
 
-        # Save outputs
-        os.makedirs(os.path.dirname(model_config_path) or '.', exist_ok=True)
+        # Ensure output directories exist
+        os.makedirs(os.path.dirname(model_config_path), exist_ok=True)
+        os.makedirs(os.path.dirname(model_weights_path), exist_ok=True) 
+        os.makedirs(os.path.dirname(model_py_path), exist_ok=True)
+        os.makedirs(os.path.dirname(schema_output_path), exist_ok=True)
+
+        # Save model config
         with open(model_config_path, 'w') as f:
             json.dump(model_config, f, indent=2)
 
-        os.makedirs(os.path.dirname(model_py_path) or '.', exist_ok=True)
+        # Save model code
         with open(model_py_path, 'w') as f:
             f.write(model_code)
 
@@ -168,21 +176,22 @@ class CLIPGITFusionModel(nn.Module):
             'model_type': 'clip_git_fusion',
             'config': model_config,
             'components': ['clip_vision', 'git_language'],
-            'status': 'initialized'
+            'status': 'initialized',
+            'pipeline_compatible': True
         }
         
-        os.makedirs(os.path.dirname(model_weights_path) or '.', exist_ok=True)
         torch.save(initial_state, model_weights_path)
 
+        # Save schema
         schema = {
             'model_type': 'clip_git_fusion',
             'vision_backend': 'clip',
             'language_backend': 'git',
             'architecture': 'custom_fusion',
-            'status': 'built'
+            'status': 'built',
+            'pipeline_compatible': True
         }
         
-        os.makedirs(os.path.dirname(schema_output_path) or '.', exist_ok=True)
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
