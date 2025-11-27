@@ -83,79 +83,79 @@ implementation:
 
         # Generate CLIP-GIT fusion model code
         model_code = '''import torch
-import torch.nn as nn
-from transformers import GitForCausalLM, GitProcessor, CLIPModel, CLIPProcessor
-
-class CLIPGITFusionModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
+        import torch.nn as nn
+        from transformers import GitForCausalLM, GitProcessor, CLIPModel, CLIPProcessor
         
-        # CLIP vision encoder
-        self.clip_model = CLIPModel.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
-        self.clip_processor = CLIPProcessor.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
+        class CLIPGITFusionModel(nn.Module):
+            def __init__(self, config):
+                super().__init__()
+                self.config = config
+                
+                # CLIP vision encoder
+                self.clip_model = CLIPModel.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
+                self.clip_processor = CLIPProcessor.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
+                
+                # GIT language model
+                self.git_model = GitForCausalLM.from_pretrained(config['language_model'])
+                self.git_processor = GitProcessor.from_pretrained(config['language_model'])
+                
+                # Freeze CLIP if specified
+                if config['vision_encoder'].get('unfreeze_layers', 0) == 0:
+                    for param in self.clip_model.parameters():
+                        param.requires_grad = False
+                
+                # Projection layer to match dimensions if needed
+                clip_dim = self.clip_model.config.projection_dim
+                git_vision_dim = self.git_model.config.vision_config.hidden_size
+                
+                if clip_dim != git_vision_dim:
+                    self.vision_proj = nn.Linear(clip_dim, git_vision_dim)
+                else:
+                    self.vision_proj = nn.Identity()
         
-        # GIT language model
-        self.git_model = GitForCausalLM.from_pretrained(config['language_model'])
-        self.git_processor = GitProcessor.from_pretrained(config['language_model'])
+            def forward(self, images, input_ids=None, attention_mask=None, labels=None):
+                # Extract CLIP features
+                clip_inputs = self.clip_processor(images=images, return_tensors='pt')
+                clip_inputs = {k: v.to(self.git_model.device) for k, v in clip_inputs.items()}
+                
+                with torch.no_grad():
+                    clip_features = self.clip_model.get_image_features(**clip_inputs)
+                
+                # Project to GIT vision dimension
+                visual_features = self.vision_proj(clip_features)
+                
+                # Get text inputs
+                if input_ids is not None:
+                    # Use GIT model with custom visual features
+                    outputs = self.git_model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        pixel_values=None,  # Don't use GIT's built-in vision
+                        visual_embeds=visual_features.unsqueeze(1)  # Add sequence dimension
+                    )
+                    return outputs
+                else:
+                    return visual_features
         
-        # Freeze CLIP if specified
-        if config['vision_encoder'].get('unfreeze_layers', 0) == 0:
-            for param in self.clip_model.parameters():
-                param.requires_grad = False
-        
-        # Projection layer to match dimensions if needed
-        clip_dim = self.clip_model.config.projection_dim
-        git_vision_dim = self.git_model.config.vision_config.hidden_size
-        
-        if clip_dim != git_vision_dim:
-            self.vision_proj = nn.Linear(clip_dim, git_vision_dim)
-        else:
-            self.vision_proj = nn.Identity()
-
-    def forward(self, images, input_ids=None, attention_mask=None, labels=None):
-        # Extract CLIP features
-        clip_inputs = self.clip_processor(images=images, return_tensors='pt')
-        clip_inputs = {k: v.to(self.git_model.device) for k, v in clip_inputs.items()}
-        
-        with torch.no_grad():
-            clip_features = self.clip_model.get_image_features(**clip_inputs)
-        
-        # Project to GIT vision dimension
-        visual_features = self.vision_proj(clip_features)
-        
-        # Get text inputs
-        if input_ids is not None:
-            # Use GIT model with custom visual features
-            outputs = self.git_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-                pixel_values=None,  # Don't use GIT's built-in vision
-                visual_embeds=visual_features.unsqueeze(1)  # Add sequence dimension
-            )
-            return outputs
-        else:
-            return visual_features
-
-    def generate(self, images, max_length=128, temperature=1.0):
-        self.eval()
-        
-        with torch.no_grad():
-            # Extract CLIP features
-            clip_inputs = self.clip_processor(images=images, return_tensors='pt')
-            clip_inputs = {k: v.to(self.git_model.device) for k, v in clip_inputs.items()}
-            clip_features = self.clip_model.get_image_features(**clip_inputs)
-            visual_features = self.vision_proj(clip_features)
-            
-            # Use GIT for generation with custom visual features
-            return self.git_model.generate(
-                inputs_embeds=visual_features.unsqueeze(1),
-                max_length=max_length,
-                temperature=temperature,
-                do_sample=True
-            )
-'''
+            def generate(self, images, max_length=128, temperature=1.0):
+                self.eval()
+                
+                with torch.no_grad():
+                    # Extract CLIP features
+                    clip_inputs = self.clip_processor(images=images, return_tensors='pt')
+                    clip_inputs = {k: v.to(self.git_model.device) for k, v in clip_inputs.items()}
+                    clip_features = self.clip_model.get_image_features(**clip_inputs)
+                    visual_features = self.vision_proj(clip_features)
+                    
+                    # Use GIT for generation with custom visual features
+                    return self.git_model.generate(
+                        inputs_embeds=visual_features.unsqueeze(1),
+                        max_length=max_length,
+                        temperature=temperature,
+                        do_sample=True
+                    )
+        '''
 
         # Ensure output directories exist
         os.makedirs(os.path.dirname(model_config_path), exist_ok=True)
