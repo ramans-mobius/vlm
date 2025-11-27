@@ -1,0 +1,269 @@
+name: Gen Train Image Captioning Model
+description: Universal training for any image captioning architecture
+inputs:
+  - name: tokenizer_json
+    type: Model
+  - name: model_config
+    type: Data
+  - name: model_weights
+    type: Model
+  - name: model_py
+    type: Data
+  - name: caption_dataset
+    type: Dataset
+  - name: training_parameters
+    type: String
+    default: "{}"
+outputs:
+  - name: trained_model
+    type: Model
+  - name: training_report
+    type: Data
+  - name: loss_curves
+    type: Data
+  - name: schema_json
+    type: Data
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v29
+    command:
+      - sh
+      - -c
+      - |
+        python3 -c "
+        import sys, os, json, pickle, base64, io, importlib.util
+        
+        print('Starting universal image captioning training')
+        
+        tokenizer_input = sys.argv[1]
+        model_config_input = sys.argv[2]
+        model_weights_input = sys.argv[3]
+        model_py_input = sys.argv[4]
+        dataset_input = sys.argv[5]
+        training_params_input = sys.argv[6]
+        model_output = sys.argv[7]
+        report_output = sys.argv[8]
+        loss_output = sys.argv[9]
+        schema_output = sys.argv[10]
+
+        with open(model_config_input, 'r') as f:
+            model_config = json.load(f)
+        
+        architecture = model_config.get('architecture', 'git')
+        print(f'Training {architecture} model')
+
+        training_params = {}
+        try:
+            if training_params_input.strip() and training_params_input.strip() != '{}':
+                training_params = json.loads(training_params_input)
+        except Exception as e:
+            print(f'Training params parse failed: {e}')
+
+        epochs = training_params.get('epochs', 1)
+        learning_rate = training_params.get('learning_rate', 5e-5)
+        batch_size = training_params.get('batch_size', 1)
+
+        caption_data = []
+        try:
+            if os.path.exists(dataset_input):
+                with open(dataset_input, 'rb') as f:
+                    caption_data = pickle.load(f)
+                print(f'Loaded {len(caption_data)} samples')
+        except Exception as e:
+            print(f'Dataset load failed: {e}')
+
+        import torch
+        from PIL import Image
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f'Using device: {device}')
+
+        print('Loading model dynamically')
+        spec = importlib.util.spec_from_file_location('model_module', model_py_input)
+        model_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(model_module)
+        
+        if hasattr(model_module, 'UniversalImageCaptioningModel'):
+            ModelClass = getattr(model_module, 'UniversalImageCaptioningModel')
+            model = ModelClass(model_config)
+        elif hasattr(model_module, 'GITImageCaptioningModel'):
+            ModelClass = getattr(model_module, 'GITImageCaptioningModel')
+            model_wrapper = ModelClass(model_config)
+            model = model_wrapper.model
+            processor = model_wrapper.processor
+        elif hasattr(model_module, 'CLIPLLMCaptioningModel'):
+            ModelClass = getattr(model_module, 'CLIPLLMCaptioningModel')
+            model = ModelClass(model_config)
+            processor = None
+        else:
+            raise ValueError('No supported model class found in model.py')
+        
+        model = model.to(device)
+        model.train()
+
+        print('Starting training')
+        
+        for path in [model_output, report_output, loss_output, schema_output]:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        try:
+            optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+            train_losses = []
+            successful_samples = 0
+            total_processed = 0
+            
+            for epoch in range(epochs):
+                epoch_loss = 0.0
+                epoch_successful = 0
+                processed = 0
+                
+                for i, sample in enumerate(caption_data):
+                    try:
+                        optimizer.zero_grad()
+                        
+                        image_bytes = base64.b64decode(sample['image_data'])
+                        image = Image.open(io.BytesIO(image_bytes))
+                        if image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        
+                        caption = sample.get('caption', '')
+                        if not caption:
+                            continue
+
+                        if architecture == 'git' and hasattr(model, 'processor'):
+                            inputs = processor(
+                                images=image,
+                                text=caption,
+                                return_tensors='pt',
+                                padding=True,
+                                truncation=True,
+                                max_length=128
+                            )
+                            inputs = {k: v.to(device) for k, v in inputs.items()}
+                            outputs = model(**inputs, labels=inputs['input_ids'])
+                            loss = outputs.loss
+                        elif hasattr(model, 'tokenizer'):
+                            inputs = model.tokenizer(
+                                caption,
+                                return_tensors='pt',
+                                padding=True,
+                                truncation=True,
+                                max_length=128
+                            )
+                            inputs = {k: v.to(device) for k, v in inputs.items()}
+                            outputs = model([image], inputs['input_ids'], inputs['attention_mask'], inputs['input_ids'])
+                            loss = outputs.loss
+                        else:
+                            print('Unsupported model architecture')
+                            continue
+
+                        if not torch.isnan(loss) and not torch.isinf(loss):
+                            loss.backward()
+                            optimizer.step()
+                            epoch_loss += loss.item()
+                            epoch_successful += 1
+                            successful_samples += 1
+                            
+                            if epoch_successful % 20 == 0:
+                                print(f'Epoch {epoch+1}, sample {epoch_successful}, loss: {loss.item():.4f}')
+                                
+                    except Exception as e:
+                        if processed < 3:
+                            print(f'Sample {i} failed: {e}')
+                        continue
+                    finally:
+                        processed += 1
+                        total_processed += 1
+                
+                if epoch_successful > 0:
+                    avg_loss = epoch_loss / epoch_successful
+                    train_losses.append(avg_loss)
+                    print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}, successful={epoch_successful}/{processed}')
+                else:
+                    train_losses.append(0.0)
+                    print(f'Epoch {epoch+1}: no successful samples')
+            
+            final_loss = train_losses[-1] if train_losses else 0.0
+            
+            if architecture == 'git' and hasattr(model, 'save_pretrained'):
+                model.save_pretrained(os.path.dirname(model_output))
+                if hasattr(processor, 'save_pretrained'):
+                    processor.save_pretrained(os.path.dirname(model_output))
+            elif hasattr(model, 'save_pretrained'):
+                model.save_pretrained(os.path.dirname(model_output))
+            else:
+                torch.save(model.state_dict(), os.path.join(os.path.dirname(model_output), 'model_weights.pt'))
+                if hasattr(model, 'tokenizer') and hasattr(model.tokenizer, 'save_pretrained'):
+                    model.tokenizer.save_pretrained(os.path.dirname(model_output))
+
+            training_info = {
+                'model_type': architecture,
+                'training_params': training_params,
+                'final_loss': float(final_loss),
+                'epochs_trained': len(train_losses),
+                'successful_samples': successful_samples,
+                'total_samples': len(caption_data),
+                'total_processed': total_processed
+            }
+            
+            torch.save(training_info, model_output)
+            
+            report = {
+                'status': 'success',
+                'architecture': architecture,
+                'epochs_completed': len(train_losses),
+                'final_loss': float(final_loss),
+                'successful_samples': successful_samples,
+                'total_samples': len(caption_data),
+                'device': device
+            }
+            
+            with open(report_output, 'w') as f:
+                json.dump(report, f, indent=2)
+            
+            loss_data = {
+                'epochs': list(range(1, len(train_losses) + 1)),
+                'train_loss': [float(loss) for loss in train_losses],
+                'architecture': architecture
+            }
+            
+            with open(loss_output, 'w') as f:
+                json.dump(loss_data, f, indent=2)
+            
+            schema = {
+                'training_completed': True,
+                'architecture': architecture,
+                'final_loss': float(final_loss),
+                'successful_samples': successful_samples
+            }
+            
+            with open(schema_output, 'w') as f:
+                json.dump(schema, f, indent=2)
+            
+            print(f'Training completed successfully')
+            print(f'Final loss: {final_loss:.4f}')
+            print(f'Successful samples: {successful_samples}/{len(caption_data)}')
+            
+        except Exception as e:
+            print(f'Training failed: {e}')
+            import traceback
+            traceback.print_exc()
+            
+            for path in [model_output, report_output, loss_output, schema_output]:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                if path.endswith('.json'):
+                    with open(path, 'w') as f:
+                        json.dump({'status': 'error', 'error': str(e), 'architecture': architecture}, f)
+                else:
+                    torch.save({'status': 'error', 'error': str(e), 'architecture': architecture}, path)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+    args:
+      - {inputPath: tokenizer_json}
+      - {inputPath: model_config}
+      - {inputPath: model_weights}
+      - {inputPath: model_py}
+      - {inputPath: caption_dataset}
+      - {inputValue: training_parameters}
+      - {outputPath: trained_model}
+      - {outputPath: training_report}
+      - {outputPath: loss_curves}
+      - {outputPath: schema_json}
