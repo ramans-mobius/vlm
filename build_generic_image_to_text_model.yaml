@@ -1,16 +1,11 @@
-name: Build CLIP-GIT Image To Text Model
-description: Builds a CLIP + GIT fusion model for image captioning
+name: Build GIT Image To Text Model
+description: Builds a pure GIT model for image captioning
 inputs:
   - name: tokenizer_json
     type: Model
-  - name: vision_encoder_config
-    type: Data
   - name: language_model_name
     type: String
     default: "microsoft/git-base"
-  - name: model_architecture
-    type: String
-    default: "clip_git_fusion"
   - name: domain_specialization
     type: String
     default: "general"
@@ -36,130 +31,83 @@ implementation:
         print('Number of arguments:', len(sys.argv))
         print('Arguments:', sys.argv)
         
-        # Get arguments - CORRECTED ARGUMENT INDEXING
+        # Get arguments - SIMPLIFIED (no vision encoder config)
         tokenizer_json_path = sys.argv[1]
-        vision_encoder_config_path = sys.argv[2] 
-        language_model_name = sys.argv[3]
-        model_architecture = sys.argv[4]
-        domain_specialization = sys.argv[5]
-        model_config_path = sys.argv[6]
-        model_weights_path = sys.argv[7]
-        model_py_path = sys.argv[8]
-        schema_output_path = sys.argv[9]
+        language_model_name = sys.argv[2]
+        domain_specialization = sys.argv[3]
+        model_config_path = sys.argv[4]
+        model_weights_path = sys.argv[5]
+        model_py_path = sys.argv[6]
+        schema_output_path = sys.argv[7]
 
-        print('Building CLIP-GIT fusion model...')
+        print('Building pure GIT model...')
         print('Tokenizer path: ' + tokenizer_json_path)
-        print('Vision encoder config: ' + vision_encoder_config_path)
         print('Language model: ' + language_model_name)
-        print('Model architecture: ' + model_architecture)
         print('Domain specialization: ' + domain_specialization)
 
-        # Load vision encoder config
-        vision_config = {}
-        try:
-            if os.path.exists(vision_encoder_config_path):
-                with open(vision_encoder_config_path, 'r') as f:
-                    vision_config = json.load(f)
-        except Exception as e:
-            print(f'Warning: Could not load vision config: {e}')
-
-        # Get vocab size (default for GIT)
-        vocab_size = 50257
-
-        # Create CLIP-GIT fusion model configuration
+        # Create GIT model configuration
         model_config = {
-            'model_type': 'clip_git_fusion',
+            'model_type': 'git',
             'task': 'image_captioning',
-            'vision_encoder': vision_config,
             'language_model': language_model_name,
-            'model_architecture': model_architecture,
             'domain_specialization': domain_specialization,
-            'vocab_size': vocab_size,
+            'vocab_size': 50257,  # GIT default
             'max_caption_length': 128,
             'image_size': 224,
-            'fusion_method': 'cross_attention',
             'device': 'cuda' if torch.cuda.is_available() else 'cpu'
         }
 
-        # Generate CLIP-GIT fusion model code
+        # Generate GIT model code
         model_code = '''import torch
-        import torch.nn as nn
-        from transformers import GitForCausalLM, GitProcessor, CLIPModel, CLIPProcessor
+        from transformers import GitForCausalLM, GitProcessor
         
-        class CLIPGITFusionModel(nn.Module):
+        class GITImageCaptioningModel:
             def __init__(self, config):
-                super().__init__()
                 self.config = config
+                self.model = GitForCausalLM.from_pretrained(config['language_model'])
+                self.processor = GitProcessor.from_pretrained(config['language_model'])
                 
-                # CLIP vision encoder
-                self.clip_model = CLIPModel.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
-                self.clip_processor = CLIPProcessor.from_pretrained(config['vision_encoder'].get('model_name', 'openai/clip-vit-base-patch32'))
+            def to(self, device):
+                self.model = self.model.to(device)
+                return self
                 
-                # GIT language model
-                self.git_model = GitForCausalLM.from_pretrained(config['language_model'])
-                self.git_processor = GitProcessor.from_pretrained(config['language_model'])
+            def train(self):
+                self.model.train()
                 
-                # Freeze CLIP if specified
-                if config['vision_encoder'].get('unfreeze_layers', 0) == 0:
-                    for param in self.clip_model.parameters():
-                        param.requires_grad = False
+            def eval(self):
+                self.model.eval()
                 
-                # Projection layer to match dimensions if needed
-                clip_dim = self.clip_model.config.projection_dim
-                git_vision_dim = self.git_model.config.vision_config.hidden_size
-                
-                if clip_dim != git_vision_dim:
-                    self.vision_proj = nn.Linear(clip_dim, git_vision_dim)
-                else:
-                    self.vision_proj = nn.Identity()
-        
             def forward(self, images, input_ids=None, attention_mask=None, labels=None):
-                # Extract CLIP features
-                clip_inputs = self.clip_processor(images=images, return_tensors='pt')
-                clip_inputs = {k: v.to(self.git_model.device) for k, v in clip_inputs.items()}
+                # Process images and text
+                inputs = self.processor(
+                    images=images,
+                    text=None if input_ids is None else [''],  # placeholder
+                    return_tensors='pt',
+                    padding=True,
+                    truncation=True
+                )
                 
-                with torch.no_grad():
-                    clip_features = self.clip_model.get_image_features(**clip_inputs)
-                
-                # Project to GIT vision dimension
-                visual_features = self.vision_proj(clip_features)
-                
-                # Get text inputs
                 if input_ids is not None:
-                    # Use GIT model with custom visual features
-                    outputs = self.git_model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        labels=labels,
-                        pixel_values=None,  # Don't use GIT's built-in vision
-                        visual_embeds=visual_features.unsqueeze(1)  # Add sequence dimension
-                    )
-                    return outputs
-                else:
-                    return visual_features
-        
+                    inputs['input_ids'] = input_ids
+                    inputs['attention_mask'] = attention_mask
+                    
+                # Forward pass
+                return self.model(**inputs, labels=labels)
+                
             def generate(self, images, max_length=128, temperature=1.0):
                 self.eval()
-                
-                with torch.no_grad():
-                    # Extract CLIP features
-                    clip_inputs = self.clip_processor(images=images, return_tensors='pt')
-                    clip_inputs = {k: v.to(self.git_model.device) for k, v in clip_inputs.items()}
-                    clip_features = self.clip_model.get_image_features(**clip_inputs)
-                    visual_features = self.vision_proj(clip_features)
-                    
-                    # Use GIT for generation with custom visual features
-                    return self.git_model.generate(
-                        inputs_embeds=visual_features.unsqueeze(1),
-                        max_length=max_length,
-                        temperature=temperature,
-                        do_sample=True
-                    )
+                inputs = self.processor(images=images, return_tensors='pt')
+                return self.model.generate(
+                    **inputs,
+                    max_length=max_length,
+                    temperature=temperature,
+                    do_sample=True
+                )
         '''
 
         # Ensure output directories exist
         os.makedirs(os.path.dirname(model_config_path), exist_ok=True)
-        os.makedirs(os.path.dirname(model_weights_path), exist_ok=True) 
+        os.makedirs(os.path.dirname(model_weights_path), exist_ok=True)
         os.makedirs(os.path.dirname(model_py_path), exist_ok=True)
         os.makedirs(os.path.dirname(schema_output_path), exist_ok=True)
 
@@ -171,11 +119,10 @@ implementation:
         with open(model_py_path, 'w') as f:
             f.write(model_code)
 
-        # Create initial weights
+        # Create initial weights info
         initial_state = {
-            'model_type': 'clip_git_fusion',
+            'model_type': 'git',
             'config': model_config,
-            'components': ['clip_vision', 'git_language'],
             'status': 'initialized',
             'pipeline_compatible': True
         }
@@ -184,10 +131,8 @@ implementation:
 
         # Save schema
         schema = {
-            'model_type': 'clip_git_fusion',
-            'vision_backend': 'clip',
-            'language_backend': 'git',
-            'architecture': 'custom_fusion',
+            'model_type': 'git',
+            'architecture': 'pure_git',
             'status': 'built',
             'pipeline_compatible': True
         }
@@ -195,13 +140,11 @@ implementation:
         with open(schema_output_path, 'w') as f:
             json.dump(schema, f, indent=2)
 
-        print('CLIP-GIT fusion model built successfully!')
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+        print('Pure GIT model built successfully!')
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
     args:
       - {inputPath: tokenizer_json}
-      - {inputPath: vision_encoder_config}
       - {inputValue: language_model_name}
-      - {inputValue: model_architecture}
       - {inputValue: domain_specialization}
       - {outputPath: model_config}
       - {outputPath: model_weights}
