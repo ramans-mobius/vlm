@@ -1,5 +1,5 @@
-name: PS Train Generic Image Captioning FIXED
-description: Version-compatible training brick matching your working script
+name: Train Generic Image Captioning FIXED
+description: Fixed training brick with error handling
 inputs:
   - name: tokenizer_json
     type: Model
@@ -32,8 +32,8 @@ implementation:
         import numpy as np
         from PIL import Image
         
-        print('ENHANCED TRAINING BRICK WITH VERSION CHECKING')
-        print('=' * 60)
+        print('TRAINING BRICK STARTED')
+        print('=' * 50)
         
         tokenizer_input = sys.argv[1]
         vision_config_input = sys.argv[2]
@@ -44,113 +44,102 @@ implementation:
         loss_output = sys.argv[7]
         schema_output = sys.argv[8]
         
-        print('VERSION COMPATIBILITY CHECK:')
-        print('-' * 40)
+        print('VERSION CHECK:')
+        print('torch:', torch.__version__)
+        print('numpy:', np.__version__)
+        print('pillow:', Image.__version__)
         
-        version_info = {
-            'python_version': sys.version,
-            'torch': torch.__version__,
-            'numpy': np.__version__,
-            'pillow': Image.__version__
+        training_params = {}
+        try:
+            if training_params_input.strip() and training_params_input.strip() != '{}':
+                training_params = json.loads(training_params_input)
+        except:
+            pass
+            
+        epochs = training_params.get('epochs', 1)
+        learning_rate = training_params.get('learning_rate', 5e-5)
+        batch_size = training_params.get('batch_size', 2)
+        
+        print(f'Training: {epochs} epochs, lr={learning_rate}, batch={batch_size}')
+        
+        vision_config = {
+            'model_name': 'openai/clip-vit-base-patch32',
+            'projection_dim': 512
         }
         
-        for lib, version in version_info.items():
-            print(f'  {lib:15} : {version}')
-        
-        print('VERSION COMPATIBILITY: ALL CHECKED')
-        
-        print('COMPONENT INITIALIZATION:')
-        print('-' * 40)
-        
         try:
-            training_params = json.loads(training_params_input) if training_params_input.strip() not in ['', '{}'] else {}
-        except:
-            training_params = {}
-            
-        epochs = training_params.get('epochs', 3)
-        learning_rate = training_params.get('learning_rate', 5e-5)
-        batch_size = training_params.get('batch_size', 4)
-        
-        print(f'Training config: {epochs} epochs, lr={learning_rate}, batch={batch_size}')
-        
-        try:
-            with open(vision_config_input, 'r') as f:
-                vision_config = json.load(f)
-            print('Vision config loaded')
+            if os.path.exists(vision_config_input):
+                with open(vision_config_input, 'rb') as f:
+                    vision_config = pickle.load(f)
+                print('Vision config loaded from pickle')
         except Exception as e:
-            print(f'Vision config load failed: {e}')
-            vision_config = {
-                'model_name': 'openai/clip-vit-base-patch32',
-                'projection_dim': 512
-            }
+            print(f'Vision config load failed, using defaults: {e}')
         
+        caption_data = []
         try:
-            with open(dataset_input, 'rb') as f:
-                caption_data = pickle.load(f)
-            print(f'Dataset loaded: {len(caption_data)} samples')
+            if os.path.exists(dataset_input):
+                with open(dataset_input, 'rb') as f:
+                    caption_data = pickle.load(f)
+                print(f'Dataset loaded: {len(caption_data)} samples')
         except Exception as e:
             print(f'Dataset load failed: {e}')
-            caption_data = []
-            for i in range(10):
+        
+        if not caption_data:
+            print('Creating dummy data for testing')
+            for i in range(5):
                 caption_data.append({
                     'image_data': base64.b64encode(f'dummy_image_{i}'.encode()).decode('utf-8'),
-                    'caption': f'Sample caption for image {i}',
+                    'caption': f'This is sample caption {i} for training',
                     'filename': f'sample_{i}.jpg'
                 })
-            print(f'Using dummy data: {len(caption_data)} samples')
-        
-        print('MODEL SETUP:')
-        print('-' * 40)
         
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print(f'Using device: {device}')
+        print(f'Device: {device}')
         
         try:
+            print('Importing nesy-factory components...')
             from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
             from nesy_factory.language_model.image_tokenizer import HFTokenizer
             
-            print('nesy-factory components imported successfully')
-            
+            print('Initializing tokenizer...')
             tokenizer_obj = HFTokenizer()
             tokenizer_report = tokenizer_obj.run(tokenizer_name='microsoft/git-base')
+            print(f'Tokenizer vocab size: {tokenizer_report.get(\"vocab_size\", \"unknown\")}')
             tokenizer = tokenizer_obj.tokenizer
-            print(f'Tokenizer initialized: {tokenizer_report.get(\"vocab_size\", \"unknown\")} vocab')
             
+            print('Initializing vision encoder...')
             vision_encoder = CLIPVisionEncoder(
                 model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
                 projection_dim=vision_config.get('projection_dim', 512)
             )
-            print('Vision encoder initialized')
             
             test_image = Image.new('RGB', (224, 224), color='red')
             test_features = vision_encoder.run([test_image])
-            print(f'Vision encoder test passed: features shape {test_features.shape}')
+            print(f'Vision test passed: {test_features.shape}')
             
         except Exception as e:
-            print(f'nesy-factory setup failed: {e}')
+            print(f'Component initialization failed: {e}')
             import traceback
             traceback.print_exc()
             sys.exit(1)
         
         try:
             from transformers import AutoModelForCausalLM
+            print('Loading language model...')
             language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
             language_model = language_model.to(device)
-            print('Language model initialized and moved to device')
+            print('Language model loaded')
         except Exception as e:
             print(f'Language model failed: {e}')
             sys.exit(1)
         
-        print('TRAINING LOOP:')
-        print('-' * 40)
-        
+        print('Starting training loop...')
         optimizer = torch.optim.AdamW(
             list(vision_encoder.model.parameters()) + list(language_model.parameters()),
             lr=learning_rate
         )
         
         train_losses = []
-        print(f'Starting training for {epochs} epochs...')
         
         for epoch in range(epochs):
             epoch_loss = 0.0
@@ -210,20 +199,20 @@ implementation:
                     epoch_loss += loss.item()
                     processed += 1
                     
-                    if processed % 10 == 0:
-                        print(f'Epoch {epoch+1}, samples {processed}, loss: {loss.item():.4f}')
+                    if processed % 5 == 0:
+                        print(f'Epoch {epoch+1}, sample {processed}, loss: {loss.item():.4f}')
                         
                 except Exception as e:
-                    print(f'Skipped sample {i}: {e}')
+                    print(f'Sample {i} failed: {e}')
                     continue
             
             if processed > 0:
                 avg_loss = epoch_loss / processed
                 train_losses.append(avg_loss)
-                print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}, samples={processed}')
+                print(f'Epoch {epoch+1} done: loss={avg_loss:.4f}')
             else:
                 train_losses.append(0.0)
-                print(f'Epoch {epoch+1}: No samples processed')
+                print(f'Epoch {epoch+1}: no samples')
         
         final_loss = train_losses[-1] if train_losses else 0.0
         
@@ -242,12 +231,7 @@ implementation:
             'final_loss': float(final_loss),
             'samples_processed': processed,
             'total_samples': len(caption_data),
-            'device_used': device,
-            'training_config': {
-                'epochs': epochs,
-                'learning_rate': learning_rate,
-                'batch_size': batch_size
-            }
+            'device_used': device
         }
         
         os.makedirs(os.path.dirname(report_output), exist_ok=True)
@@ -267,18 +251,15 @@ implementation:
             'training_completed': True,
             'model_type': 'image_captioning',
             'final_loss': float(final_loss),
-            'epochs_trained': len(train_losses),
-            'vision_encoder': vision_config.get('model_name'),
-            'language_model': 'microsoft/git-base'
+            'epochs_trained': len(train_losses)
         }
         
         os.makedirs(os.path.dirname(schema_output), exist_ok=True)
         with open(schema_output, 'w') as f:
             json.dump(schema, f, indent=2)
         
-        print('TRAINING COMPLETED SUCCESSFULLY')
+        print('TRAINING COMPLETED')
         print(f'Final loss: {final_loss:.4f}')
-        print(f'Model saved to: {model_output}')
         " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
       - {inputPath: tokenizer_json}
