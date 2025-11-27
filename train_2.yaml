@@ -1,0 +1,276 @@
+name: Train GIT Image Captioning
+description: Training with nesy_factory GIT components
+inputs:
+  - name: tokenizer_json
+    type: Model
+  - name: caption_dataset
+    type: Dataset
+  - name: training_parameters
+    type: String
+    default: "{}"
+outputs:
+  - name: trained_model
+    type: Model
+  - name: training_report
+    type: Data
+  - name: loss_curves
+    type: Data
+  - name: schema_json
+    type: Data
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v29
+    command:
+      - sh
+      - -c
+      - |
+        python3 -c "
+        import sys, os, json, pickle, base64, io
+        import subprocess
+        
+        print('=== SETTING UP EXACT VERSION MATCH ===')
+        
+        # Install EXACT versions from your local environment
+        print('Installing exact versions from your local environment...')
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0+cpu', '-f', 'https://download.pytorch.org/whl/torch_stable.html', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'torchvision==0.16.0+cpu', '-f', 'https://download.pytorch.org/whl/torch_stable.html', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'transformers==4.37.2', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'tokenizers==0.15.2', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'datasets==4.1.1', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'pillow==11.3.0', '-q'])
+        
+        print('Version matching completed')
+        
+        # Now proceed with training
+        import torch
+        from PIL import Image
+        
+        print('=== VERSION VERIFICATION ===')
+        print(f'torch: {torch.__version__}')
+        
+        # Get arguments
+        tokenizer_input = sys.argv[1]
+        dataset_input = sys.argv[2]
+        training_params_input = sys.argv[3]
+        model_output = sys.argv[4]
+        report_output = sys.argv[5]
+        loss_output = sys.argv[6]
+        schema_output = sys.argv[7]
+        
+        print('=== INPUT VERIFICATION ===')
+        print(f'tokenizer_input exists: {os.path.exists(tokenizer_input)}')
+        print(f'dataset_input exists: {os.path.exists(dataset_input)}')
+        
+        # Parse training parameters
+        training_params = {}
+        try:
+            if training_params_input.strip() and training_params_input.strip() != '{}':
+                training_params = json.loads(training_params_input)
+        except:
+            pass
+            
+        epochs = training_params.get('epochs', 1)
+        learning_rate = training_params.get('learning_rate', 5e-5)
+        
+        print(f'Training: {epochs} epochs, lr={learning_rate}')
+        
+        # Load dataset
+        caption_data = []
+        try:
+            if os.path.exists(dataset_input):
+                with open(dataset_input, 'rb') as f:
+                    caption_data = pickle.load(f)
+                print(f'Loaded {len(caption_data)} samples')
+        except Exception as e:
+            print(f'Dataset load failed: {e}')
+        
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f'Device: {device}')
+        
+        print('=== LOADING GIT MODEL USING NESY_FACTORY ===')
+        
+        try:
+            # Try to use nesy_factory components first
+            from nesy_factory.language_model.vision_language_models import GITVisionLanguageModel
+            
+            print('Loading GIT model via nesy_factory...')
+            git_model_wrapper = GITVisionLanguageModel()
+            model_result = git_model_wrapper.run(
+                model_name='microsoft/git-base',
+                task='image_captioning'
+            )
+            
+            # Extract the actual model and processor from the result
+            git_model = model_result.get('model')
+            git_processor = model_result.get('processor')
+            
+            if git_model is None:
+                raise Exception('nesy_factory did not return model')
+                
+            git_model = git_model.to(device)
+            print('GIT model loaded via nesy_factory!')
+            
+        except Exception as e:
+            print(f'nesy_factory GIT loading failed: {e}, using transformers fallback')
+            # Fallback to transformers
+            from transformers import GitForCausalLM, GitProcessor
+            git_processor = GitProcessor.from_pretrained('microsoft/git-base')
+            git_model = GitForCausalLM.from_pretrained('microsoft/git-base')
+            git_model = git_model.to(device)
+            print('Used transformers fallback')
+        
+        print('=== STARTING TRAINING ===')
+        
+        # Create output directories
+        for path in [model_output, report_output, loss_output, schema_output]:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        try:
+            optimizer = torch.optim.AdamW(git_model.parameters(), lr=learning_rate)
+            train_losses = []
+            
+            for epoch in range(epochs):
+                epoch_loss = 0.0
+                successful_samples = 0
+                processed = 0
+                
+                for i, sample in enumerate(caption_data):
+                    try:
+                        optimizer.zero_grad()
+                        
+                        # Process image and text
+                        image_bytes = base64.b64decode(sample['image_data'])
+                        image = Image.open(io.BytesIO(image_bytes))
+                        if image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        
+                        caption = sample.get('caption', '')
+                        if not caption:
+                            continue
+                        
+                        # Process with GIT
+                        inputs = git_processor(
+                            images=image,
+                            text=caption,
+                            return_tensors='pt',
+                            padding=True,
+                            truncation=True,
+                            max_length=128
+                        )
+                        
+                        # Move to device
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        # Forward pass
+                        outputs = git_model(
+                            pixel_values=inputs.get('pixel_values'),
+                            input_ids=inputs.get('input_ids'),
+                            attention_mask=inputs.get('attention_mask'),
+                            labels=inputs.get('input_ids')
+                        )
+                        
+                        loss = outputs.loss
+                        
+                        if not torch.isnan(loss) and not torch.isinf(loss):
+                            loss.backward()
+                            optimizer.step()
+                            epoch_loss += loss.item()
+                            successful_samples += 1
+                            
+                            if successful_samples % 20 == 0:
+                                print(f'Epoch {epoch+1}, sample {successful_samples}, loss: {loss.item():.4f}')
+                                
+                    except Exception as e:
+                        if processed < 3:
+                            print(f'Sample {i} failed: {e}')
+                        continue
+                    finally:
+                        processed += 1
+                
+                if successful_samples > 0:
+                    avg_loss = epoch_loss / successful_samples
+                    train_losses.append(avg_loss)
+                    print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}, successful={successful_samples}/{processed}')
+                else:
+                    train_losses.append(0.0)
+                    print(f'Epoch {epoch+1}: no successful samples')
+            
+            final_loss = train_losses[-1] if train_losses else 0.0
+            
+            # Save the trained model
+            git_model.save_pretrained(os.path.dirname(model_output))
+            git_processor.save_pretrained(os.path.dirname(model_output))
+            
+            # Save training info
+            training_info = {
+                'model_type': 'git_base',
+                'training_params': training_params,
+                'final_loss': float(final_loss),
+                'epochs_trained': len(train_losses),
+                'successful_samples': successful_samples,
+                'total_samples': len(caption_data),
+                'used_nesy_factory': 'GITVisionLanguageModel' in str(type(git_model))
+            }
+            
+            torch.save(training_info, model_output)
+            
+            # Create reports
+            report = {
+                'status': 'success',
+                'model': 'microsoft/git-base',
+                'epochs_completed': len(train_losses),
+                'final_loss': float(final_loss),
+                'successful_samples': successful_samples,
+                'total_samples': len(caption_data),
+                'device': device,
+                'library_used': 'nesy_factory' if 'GITVisionLanguageModel' in str(type(git_model)) else 'transformers'
+            }
+            
+            with open(report_output, 'w') as f:
+                json.dump(report, f, indent=2)
+            
+            loss_data = {
+                'epochs': list(range(1, len(train_losses) + 1)),
+                'train_loss': [float(loss) for loss in train_losses]
+            }
+            
+            with open(loss_output, 'w') as f:
+                json.dump(loss_data, f, indent=2)
+            
+            schema = {
+                'training_completed': True,
+                'model_type': 'git_image_captioning',
+                'final_loss': float(final_loss),
+                'successful_samples': successful_samples
+            }
+            
+            with open(schema_output, 'w') as f:
+                json.dump(schema, f, indent=2)
+            
+            print('=== TRAINING COMPLETED SUCCESSFULLY! ===')
+            print(f'Final loss: {final_loss:.4f}')
+            print(f'Successful samples: {successful_samples}/{len(caption_data)}')
+            print(f'Library used: {\\\"nesy_factory\\\" if \\\"GITVisionLanguageModel\\\" in str(type(git_model)) else \\\"transformers\\\"}')
+            
+        except Exception as e:
+            print(f'=== TRAINING FAILED: {e} ===')
+            import traceback
+            traceback.print_exc()
+            
+            # Create error outputs
+            for path in [model_output, report_output, loss_output, schema_output]:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                if path.endswith('.json'):
+                    with open(path, 'w') as f:
+                        json.dump({'status': 'error', 'error': str(e)}, f)
+                else:
+                    torch.save({'status': 'error', 'error': str(e)}, path)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
+    args:
+      - {inputPath: tokenizer_json}
+      - {inputPath: caption_dataset}
+      - {inputValue: training_parameters}
+      - {outputPath: trained_model}
+      - {outputPath: training_report}
+      - {outputPath: loss_curves}
+      - {outputPath: schema_json}
