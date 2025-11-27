@@ -1,10 +1,8 @@
-name: Train Generic Image Captioning COMPATIBLE
-description: Generalized training for both GIT and CLIP+GIT architectures
+name: Train GIT Image Captioning
+description: Training with pure GIT model - SIMPLIFIED
 inputs:
   - name: tokenizer_json
     type: Model
-  - name: vision_encoder_config
-    type: Data
   - name: caption_dataset
     type: Dataset
   - name: training_parameters
@@ -45,25 +43,22 @@ implementation:
         
         # Now proceed with training
         import torch
-        import torch.nn as nn
         from PIL import Image
         
         print('=== VERSION VERIFICATION ===')
         print(f'torch: {torch.__version__}')
         
-        # Get arguments
+        # Get arguments - SIMPLIFIED (no vision_encoder_config)
         tokenizer_input = sys.argv[1]
-        vision_config_input = sys.argv[2]
-        dataset_input = sys.argv[3]
-        training_params_input = sys.argv[4]
-        model_output = sys.argv[5]
-        report_output = sys.argv[6]
-        loss_output = sys.argv[7]
-        schema_output = sys.argv[8]
+        dataset_input = sys.argv[2]
+        training_params_input = sys.argv[3]
+        model_output = sys.argv[4]
+        report_output = sys.argv[5]
+        loss_output = sys.argv[6]
+        schema_output = sys.argv[7]
         
         print('=== INPUT VERIFICATION ===')
         print(f'tokenizer_input exists: {os.path.exists(tokenizer_input)}')
-        print(f'vision_config_input exists: {os.path.exists(vision_config_input)}')
         print(f'dataset_input exists: {os.path.exists(dataset_input)}')
         
         # Parse training parameters
@@ -79,22 +74,6 @@ implementation:
         
         print(f'Training: {epochs} epochs, lr={learning_rate}')
         
-        # Load vision config to detect architecture
-        vision_config = {}
-        architecture_type = 'git_only'  # Default
-        try:
-            if os.path.exists(vision_config_input):
-                with open(vision_config_input, 'r') as f:
-                    vision_config = json.load(f)
-                # Detect architecture type
-                if vision_config.get('encoder_type') == 'clip':
-                    architecture_type = 'clip_git_fusion'
-                    print('Detected CLIP+GIT fusion architecture')
-                else:
-                    print('Detected pure GIT architecture')
-        except:
-            print('Using default GIT architecture')
-        
         # Load dataset
         caption_data = []
         try:
@@ -107,58 +86,21 @@ implementation:
         
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f'Device: {device}')
-        print(f'Architecture: {architecture_type}')
         
-        print('=== LOADING MODEL COMPONENTS ===')
+        print('=== LOADING GIT MODEL ===')
         
         try:
-            if architecture_type == 'clip_git_fusion':
-                # CLIP + GIT Fusion Architecture
-                from transformers import GitForCausalLM, GitProcessor, CLIPModel, CLIPProcessor
-                
-                print('Loading CLIP vision encoder...')
-                clip_model = CLIPModel.from_pretrained(vision_config.get('model_name', 'openai/clip-vit-base-patch32'))
-                clip_processor = CLIPProcessor.from_pretrained(vision_config.get('model_name', 'openai/clip-vit-base-patch32'))
-                
-                print('Loading GIT language model...')
-                git_model = GitForCausalLM.from_pretrained('microsoft/git-base')
-                git_processor = GitProcessor.from_pretrained('microsoft/git-base')
-                
-                # Move to device
-                clip_model = clip_model.to(device)
-                git_model = git_model.to(device)
-                
-                # Freeze CLIP if specified
-                if vision_config.get('unfreeze_layers', 0) == 0:
-                    for param in clip_model.parameters():
-                        param.requires_grad = False
-                    print('CLIP model frozen')
-                
-                # Projection layer if dimensions don't match
-                clip_dim = clip_model.config.projection_dim
-                git_vision_dim = git_model.config.vision_config.hidden_size
-                
-                if clip_dim != git_vision_dim:
-                    vision_proj = nn.Linear(clip_dim, git_vision_dim).to(device)
-                    print(f'Added projection layer: {clip_dim} -> {git_vision_dim}')
-                else:
-                    vision_proj = nn.Identity().to(device)
-                
-                print('CLIP+GIT fusion model loaded successfully!')
-                
-            else:
-                # Pure GIT Architecture
-                from transformers import GitForCausalLM, GitProcessor
-                
-                print('Loading pure GIT model...')
-                git_model = GitForCausalLM.from_pretrained('microsoft/git-base')
-                git_processor = GitProcessor.from_pretrained('microsoft/git-base')
-                git_model = git_model.to(device)
-                
-                print('Pure GIT model loaded successfully!')
-                
+            from transformers import GitForCausalLM, GitProcessor
+            
+            print('Loading GIT processor and model...')
+            git_processor = GitProcessor.from_pretrained('microsoft/git-base')
+            git_model = GitForCausalLM.from_pretrained('microsoft/git-base')
+            
+            git_model = git_model.to(device)
+            print('GIT model loaded successfully!')
+            
         except Exception as e:
-            print(f'Model loading failed: {e}')
+            print(f'GIT model loading failed: {e}')
             import traceback
             traceback.print_exc()
             sys.exit(1)
@@ -170,29 +112,19 @@ implementation:
             os.makedirs(os.path.dirname(path), exist_ok=True)
         
         try:
-            # Setup optimizer based on architecture
-            if architecture_type == 'clip_git_fusion':
-                # Train both projection layer and GIT model
-                trainable_params = list(git_model.parameters()) + list(vision_proj.parameters())
-                if vision_config.get('unfreeze_layers', 0) > 0:
-                    trainable_params += list(clip_model.parameters())
-            else:
-                # Train only GIT model
-                trainable_params = git_model.parameters()
-            
-            optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
+            optimizer = torch.optim.AdamW(git_model.parameters(), lr=learning_rate)
             train_losses = []
             
             for epoch in range(epochs):
                 epoch_loss = 0.0
-                processed = 0
                 successful_samples = 0
+                processed = 0
                 
                 for i, sample in enumerate(caption_data):
                     try:
                         optimizer.zero_grad()
                         
-                        # Process image and text
+                        # Process image and text using GIT processor
                         image_bytes = base64.b64decode(sample['image_data'])
                         image = Image.open(io.BytesIO(image_bytes))
                         if image.mode != 'RGB':
@@ -202,61 +134,30 @@ implementation:
                         if not caption:
                             continue
                         
-                        if architecture_type == 'clip_git_fusion':
-                            # CLIP+GIT processing
-                            # Extract CLIP features
-                            clip_inputs = clip_processor(images=image, return_tensors='pt')
-                            clip_inputs = {k: v.to(device) for k, v in clip_inputs.items()}
-                            
-                            with torch.no_grad():
-                                clip_features = clip_model.get_image_features(**clip_inputs)
-                            
-                            # Project to GIT vision dimension
-                            visual_features = vision_proj(clip_features)
-                            
-                            # Process text with GIT
-                            text_inputs = git_processor(
-                                text=caption,
-                                return_tensors='pt',
-                                padding=True,
-                                truncation=True,
-                                max_length=128
-                            )
-                            text_inputs = {k: v.to(device) for k, v in text_inputs.items()}
-                            
-                            # Forward pass with custom visual features
-                            # Note: This requires a custom forward pass in GIT
-                            outputs = git_model(
-                                input_ids=text_inputs['input_ids'],
-                                attention_mask=text_inputs['attention_mask'],
-                                labels=text_inputs['input_ids'],
-                                pixel_values=None,  # Don't use GIT's vision
-                                visual_embeds=visual_features.unsqueeze(1)  # Custom visual features
-                            )
-                            
-                        else:
-                            # Pure GIT processing
-                            inputs = git_processor(
-                                images=image,
-                                text=caption,
-                                return_tensors='pt',
-                                padding=True,
-                                truncation=True,
-                                max_length=128
-                            )
-                            inputs = {k: v.to(device) for k, v in inputs.items()}
-                            
-                            # Standard GIT forward pass
-                            outputs = git_model(
-                                pixel_values=inputs.get('pixel_values'),
-                                input_ids=inputs.get('input_ids'),
-                                attention_mask=inputs.get('attention_mask'),
-                                labels=inputs.get('input_ids')
-                            )
+                        # SIMPLIFIED: GIT processor handles everything
+                        inputs = git_processor(
+                            images=image,
+                            text=caption,
+                            return_tensors='pt',
+                            padding=True,
+                            truncation=True,
+                            max_length=128
+                        )
+                        
+                        # Move to device
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        
+                        # SIMPLIFIED: Standard GIT forward pass
+                        outputs = git_model(
+                            pixel_values=inputs.get('pixel_values'),
+                            input_ids=inputs.get('input_ids'),
+                            attention_mask=inputs.get('attention_mask'),
+                            labels=inputs.get('input_ids')
+                        )
                         
                         loss = outputs.loss
                         
-                        if not torch.isnan(loss) and not torch.isinf(loss) and loss > 0:
+                        if not torch.isnan(loss) and not torch.isinf(loss):
                             loss.backward()
                             optimizer.step()
                             epoch_loss += loss.item()
@@ -282,41 +183,31 @@ implementation:
             
             final_loss = train_losses[-1] if train_losses else 0.0
             
-            # Save model based on architecture
+            # Save the trained GIT model
+            git_model.save_pretrained(os.path.dirname(model_output))
+            git_processor.save_pretrained(os.path.dirname(model_output))
+            
+            # Save training info
             training_info = {
-                'architecture': architecture_type,
+                'model_type': 'git_base',
                 'training_params': training_params,
                 'final_loss': float(final_loss),
                 'epochs_trained': len(train_losses),
                 'successful_samples': successful_samples,
-                'total_samples': len(caption_data),
-                'vision_config': vision_config if architecture_type == 'clip_git_fusion' else {}
+                'total_samples': len(caption_data)
             }
-            
-            if architecture_type == 'clip_git_fusion':
-                # Save CLIP+GIT components
-                training_info.update({
-                    'clip_model': clip_model.state_dict(),
-                    'git_model': git_model.state_dict(),
-                    'vision_proj': vision_proj.state_dict()
-                })
-            else:
-                # Save pure GIT model
-                git_model.save_pretrained(os.path.dirname(model_output))
-                git_processor.save_pretrained(os.path.dirname(model_output))
             
             torch.save(training_info, model_output)
             
             # Create reports
             report = {
                 'status': 'success',
-                'architecture': architecture_type,
+                'model': 'microsoft/git-base',
                 'epochs_completed': len(train_losses),
                 'final_loss': float(final_loss),
                 'successful_samples': successful_samples,
                 'total_samples': len(caption_data),
-                'device': device,
-                'vision_encoder_used': vision_config.get('model_name', 'none') if architecture_type == 'clip_git_fusion' else 'git_builtin'
+                'device': device
             }
             
             with open(report_output, 'w') as f:
@@ -324,8 +215,7 @@ implementation:
             
             loss_data = {
                 'epochs': list(range(1, len(train_losses) + 1)),
-                'train_loss': [float(loss) for loss in train_losses],
-                'architecture': architecture_type
+                'train_loss': [float(loss) for loss in train_losses]
             }
             
             with open(loss_output, 'w') as f:
@@ -333,18 +223,15 @@ implementation:
             
             schema = {
                 'training_completed': True,
-                'architecture': architecture_type,
+                'model_type': 'git_image_captioning',
                 'final_loss': float(final_loss),
-                'successful_samples': successful_samples,
-                'pipeline_compatible': True,
-                'model_type': 'image_captioning'
+                'successful_samples': successful_samples
             }
             
             with open(schema_output, 'w') as f:
                 json.dump(schema, f, indent=2)
             
             print('=== TRAINING COMPLETED SUCCESSFULLY! ===')
-            print(f'Architecture: {architecture_type}')
             print(f'Final loss: {final_loss:.4f}')
             print(f'Successful samples: {successful_samples}/{len(caption_data)}')
             
@@ -358,13 +245,12 @@ implementation:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 if path.endswith('.json'):
                     with open(path, 'w') as f:
-                        json.dump({'status': 'error', 'error': str(e), 'architecture': architecture_type}, f)
+                        json.dump({'status': 'error', 'error': str(e)}, f)
                 else:
-                    torch.save({'status': 'error', 'error': str(e), 'architecture': architecture_type}, path)
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+                    torch.save({'status': 'error', 'error': str(e)}, path)
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
     args:
       - {inputPath: tokenizer_json}
-      - {inputPath: vision_encoder_config}
       - {inputPath: caption_dataset}
       - {inputValue: training_parameters}
       - {outputPath: trained_model}
