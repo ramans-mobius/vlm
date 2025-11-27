@@ -1,5 +1,5 @@
-name: Train Generic Image Captioning FIXED
-description: Fixed training brick with error handling
+name: Train Generic Image Captioning STANDALONE
+description: Standalone training without nesy-factory dependencies
 inputs:
   - name: tokenizer_json
     type: Model
@@ -29,10 +29,11 @@ implementation:
         python3 -c "
         import sys, os, json, pickle, base64, io
         import torch
+        import torch.nn as nn
         import numpy as np
         from PIL import Image
         
-        print('TRAINING BRICK STARTED')
+        print('STANDALONE TRAINING BRICK STARTED')
         print('=' * 50)
         
         tokenizer_input = sys.argv[1]
@@ -47,7 +48,6 @@ implementation:
         print('VERSION CHECK:')
         print('torch:', torch.__version__)
         print('numpy:', np.__version__)
-        print('pillow:', Image.__version__)
         
         training_params = {}
         try:
@@ -58,9 +58,8 @@ implementation:
             
         epochs = training_params.get('epochs', 1)
         learning_rate = training_params.get('learning_rate', 5e-5)
-        batch_size = training_params.get('batch_size', 2)
         
-        print(f'Training: {epochs} epochs, lr={learning_rate}, batch={batch_size}')
+        print(f'Training: {epochs} epochs, lr={learning_rate}')
         
         vision_config = {
             'model_name': 'openai/clip-vit-base-patch32',
@@ -86,7 +85,7 @@ implementation:
         
         if not caption_data:
             print('Creating dummy data for testing')
-            for i in range(5):
+            for i in range(3):
                 caption_data.append({
                     'image_data': base64.b64encode(f'dummy_image_{i}'.encode()).decode('utf-8'),
                     'caption': f'This is sample caption {i} for training',
@@ -96,46 +95,55 @@ implementation:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f'Device: {device}')
         
+        print('STANDALONE COMPONENT INITIALIZATION:')
+        
         try:
-            print('Importing nesy-factory components...')
-            from nesy_factory.language_model.vision_encoders import CLIPVisionEncoder
-            from nesy_factory.language_model.image_tokenizer import HFTokenizer
+            from transformers import CLIPProcessor, CLIPModel, AutoTokenizer, AutoModelForCausalLM
             
-            print('Initializing tokenizer...')
-            tokenizer_obj = HFTokenizer()
-            tokenizer_report = tokenizer_obj.run(tokenizer_name='microsoft/git-base')
-            print(f'Tokenizer vocab size: {tokenizer_report.get(\"vocab_size\", \"unknown\")}')
-            tokenizer = tokenizer_obj.tokenizer
+            print('Loading CLIP vision encoder...')
+            clip_processor = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
+            clip_model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32')
+            clip_model = clip_model.to(device)
             
-            print('Initializing vision encoder...')
-            vision_encoder = CLIPVisionEncoder(
-                model_name=vision_config.get('model_name', 'openai/clip-vit-base-patch32'),
-                projection_dim=vision_config.get('projection_dim', 512)
-            )
+            print('Loading tokenizer...')
+            tokenizer = AutoTokenizer.from_pretrained('microsoft/git-base')
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
             
-            test_image = Image.new('RGB', (224, 224), color='red')
-            test_features = vision_encoder.run([test_image])
-            print(f'Vision test passed: {test_features.shape}')
+            print('Loading language model...')
+            language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
+            language_model = language_model.to(device)
+            
+            print('All components loaded successfully')
             
         except Exception as e:
-            print(f'Component initialization failed: {e}')
+            print(f'Component loading failed: {e}')
             import traceback
             traceback.print_exc()
             sys.exit(1)
         
-        try:
-            from transformers import AutoModelForCausalLM
-            print('Loading language model...')
-            language_model = AutoModelForCausalLM.from_pretrained('microsoft/git-base')
-            language_model = language_model.to(device)
-            print('Language model loaded')
-        except Exception as e:
-            print(f'Language model failed: {e}')
-            sys.exit(1)
-        
         print('Starting training loop...')
+        
+        class SimpleVisionEncoder:
+            def __init__(self, clip_model, clip_processor):
+                self.model = clip_model
+                self.processor = clip_processor
+                self.projection = nn.Linear(512, 512)
+            
+            def run(self, images):
+                if not isinstance(images, list):
+                    images = [images]
+                inputs = self.processor(images=images, return_tensors='pt')
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                with torch.no_grad():
+                    features = self.model.get_image_features(**inputs)
+                return self.projection(features)
+        
+        vision_encoder = SimpleVisionEncoder(clip_model, clip_processor)
+        vision_encoder = vision_encoder.to(device)
+        
         optimizer = torch.optim.AdamW(
-            list(vision_encoder.model.parameters()) + list(language_model.parameters()),
+            list(vision_encoder.parameters()) + list(language_model.parameters()),
             lr=learning_rate
         )
         
@@ -157,7 +165,7 @@ implementation:
                             image = Image.open(io.BytesIO(image_bytes))
                             if image.mode != 'RGB':
                                 image = image.convert('RGB')
-                            image_features = vision_encoder.run([image]).to(device)
+                            image_features = vision_encoder.run([image])
                         except Exception as e:
                             print(f'Image processing failed: {e}')
                             image_features = torch.randn(1, 512).to(device)
@@ -165,7 +173,7 @@ implementation:
                     inputs = tokenizer(
                         sample['caption'],
                         return_tensors='pt',
-                        max_length=128,
+                        max_length=64,
                         padding='max_length',
                         truncation=True
                     )
@@ -199,8 +207,7 @@ implementation:
                     epoch_loss += loss.item()
                     processed += 1
                     
-                    if processed % 5 == 0:
-                        print(f'Epoch {epoch+1}, sample {processed}, loss: {loss.item():.4f}')
+                    print(f'Epoch {epoch+1}, sample {processed}, loss: {loss.item():.4f}')
                         
                 except Exception as e:
                     print(f'Sample {i} failed: {e}')
@@ -209,16 +216,17 @@ implementation:
             if processed > 0:
                 avg_loss = epoch_loss / processed
                 train_losses.append(avg_loss)
-                print(f'Epoch {epoch+1} done: loss={avg_loss:.4f}')
+                print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}')
             else:
                 train_losses.append(0.0)
-                print(f'Epoch {epoch+1}: no samples')
+                print(f'Epoch {epoch+1}: no samples processed')
         
         final_loss = train_losses[-1] if train_losses else 0.0
         
         os.makedirs(os.path.dirname(model_output), exist_ok=True)
         torch.save({
             'language_model_state_dict': language_model.state_dict(),
+            'vision_encoder_state_dict': vision_encoder.state_dict(),
             'vision_config': vision_config,
             'training_params': training_params,
             'final_loss': final_loss,
@@ -231,7 +239,8 @@ implementation:
             'final_loss': float(final_loss),
             'samples_processed': processed,
             'total_samples': len(caption_data),
-            'device_used': device
+            'device_used': device,
+            'method': 'standalone_training'
         }
         
         os.makedirs(os.path.dirname(report_output), exist_ok=True)
@@ -251,15 +260,17 @@ implementation:
             'training_completed': True,
             'model_type': 'image_captioning',
             'final_loss': float(final_loss),
-            'epochs_trained': len(train_losses)
+            'epochs_trained': len(train_losses),
+            'method': 'standalone_direct_components'
         }
         
         os.makedirs(os.path.dirname(schema_output), exist_ok=True)
         with open(schema_output, 'w') as f:
             json.dump(schema, f, indent=2)
         
-        print('TRAINING COMPLETED')
+        print('STANDALONE TRAINING COMPLETED SUCCESSFULLY')
         print(f'Final loss: {final_loss:.4f}')
+        print('Model saved successfully')
         " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
       - {inputPath: tokenizer_json}
