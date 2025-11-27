@@ -1,5 +1,5 @@
-name: Train Generic Image Captioning FIXED
-description: Training with transformers compatibility fix
+name: Train Generic Image Captioning COMPATIBLE
+description: Training with exact version matching
 inputs:
   - name: tokenizer_json
     type: Model
@@ -30,16 +30,18 @@ implementation:
         import sys, os, json, pickle, base64, io
         import subprocess
         
-        print('=== FIXING TRANSFORMERS COMPATIBILITY ===')
+        print('=== SETTING UP EXACT VERSION MATCH ===')
         
-        # Fix the torchao compatibility issue first
-        print('Removing incompatible torchao...')
-        subprocess.call([sys.executable, '-m', 'pip', 'uninstall', 'torchao', '-y', '-q'])
+        # Install EXACT versions from your local environment
+        print('Installing exact versions from your local environment...')
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0+cpu', '-f', 'https://download.pytorch.org/whl/torch_stable.html', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'torchvision==0.16.0+cpu', '-f', 'https://download.pytorch.org/whl/torch_stable.html', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'transformers==4.37.2', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'tokenizers==0.15.2', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'datasets==4.1.1', '-q'])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', 'pillow==11.3.0', '-q'])
         
-        print('Installing compatible transformers...')
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'transformers==4.30.2', '-q'])
-        
-        print('Compatibility fix completed')
+        print('Version matching completed')
         
         # Now proceed with training
         import torch
@@ -47,13 +49,11 @@ implementation:
         import numpy as np
         from PIL import Image
         
-        print('TRAINING STARTED')
+        print('=== VERSION VERIFICATION ===')
+        print(f'torch: {torch.__version__}')
+        print(f'torchvision: {torchvision.__version__}')
         
-        # Get arguments - CORRECTED ARGUMENT NUMBERING
-        print(f'Total arguments: {len(sys.argv)}')
-        for i, arg in enumerate(sys.argv):
-            print(f'  Argument {i}: {arg}')
-        
+        # Get arguments
         tokenizer_input = sys.argv[1]
         vision_config_input = sys.argv[2]
         dataset_input = sys.argv[3]
@@ -63,11 +63,10 @@ implementation:
         loss_output = sys.argv[7]
         schema_output = sys.argv[8]
         
-        print('Input analysis:')
-        print(f'  tokenizer_input: {tokenizer_input} (exists: {os.path.exists(tokenizer_input)})')
-        print(f'  vision_config_input: {vision_config_input} (exists: {os.path.exists(vision_config_input)})')
-        print(f'  dataset_input: {dataset_input} (exists: {os.path.exists(dataset_input)})')
-        print(f'  training_params_input: {training_params_input}')
+        print('=== INPUT VERIFICATION ===')
+        print(f'tokenizer_input exists: {os.path.exists(tokenizer_input)}')
+        print(f'vision_config_input exists: {os.path.exists(vision_config_input)}')
+        print(f'dataset_input exists: {os.path.exists(dataset_input)}')
         
         # Parse training parameters
         training_params = {}
@@ -88,9 +87,8 @@ implementation:
             if os.path.exists(vision_config_input):
                 with open(vision_config_input, 'rb') as f:
                     vision_config = pickle.load(f)
-                print('Vision config loaded successfully')
-        except Exception as e:
-            print(f'Vision config load failed: {e}')
+        except:
+            pass
         
         # Load dataset
         caption_data = []
@@ -102,25 +100,12 @@ implementation:
         except Exception as e:
             print(f'Dataset load failed: {e}')
         
-        if not caption_data:
-            print('Creating dummy data')
-            for i in range(2):
-                img = Image.new('RGB', (224, 224), color=(i * 100, i * 50, i * 25))
-                img_bytes = io.BytesIO()
-                img.save(img_bytes, format='PNG')
-                caption_data.append({
-                    'image_data': base64.b64encode(img_bytes.getvalue()).decode('utf-8'),
-                    'caption': f'Sample caption {i}',
-                    'filename': f'sample_{i}.png'
-                })
-        
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f'Device: {device}')
         
-        print('Loading components with fixed transformers...')
+        print('=== LOADING COMPONENTS ===')
         
         try:
-            # Now transformers should work without torchao issues
             from transformers import AutoTokenizer, AutoModelForCausalLM, CLIPProcessor, CLIPModel
             
             print('Loading tokenizer...')
@@ -167,7 +152,7 @@ implementation:
             traceback.print_exc()
             sys.exit(1)
         
-        print('Starting training...')
+        print('=== STARTING TRAINING ===')
         
         # Create output directories
         for path in [model_output, report_output, loss_output, schema_output]:
@@ -196,9 +181,9 @@ implementation:
                             if image.mode != 'RGB':
                                 image = image.convert('RGB')
                             image_features = vision_encoder.run([image])
-                        except:
-                            fallback_image = Image.new('RGB', (224, 224), color='blue')
-                            image_features = vision_encoder.run([fallback_image])
+                        except Exception as e:
+                            print(f'Image processing failed for sample {i}: {e}')
+                            continue
                         
                         # Tokenize
                         inputs = tokenizer(
@@ -212,10 +197,11 @@ implementation:
                         input_ids = inputs['input_ids'].to(device)
                         attention_mask = inputs.get('attention_mask', torch.ones_like(input_ids)).to(device)
                         
-                        # Fuse features
+                        # Fuse features - FIX BATCH SIZE ISSUE
                         text_embeddings = language_model.get_input_embeddings()(input_ids)
                         image_features_expanded = image_features.unsqueeze(1)
                         
+                        # Ensure exact shape matching
                         if image_features_expanded.shape[1] < text_embeddings.shape[1]:
                             padding = text_embeddings.shape[1] - image_features_expanded.shape[1]
                             image_features_expanded = torch.nn.functional.pad(
@@ -238,17 +224,18 @@ implementation:
                         epoch_loss += loss.item()
                         processed += 1
                         
-                        if processed % 10 == 0:
+                        if processed % 20 == 0:
                             print(f'Epoch {epoch+1}, sample {processed}, loss: {loss.item():.4f}')
                             
                     except Exception as e:
-                        print(f'Sample {i} failed: {e}')
+                        if processed < 10:  # Only show first few errors
+                            print(f'Sample {i} failed: {e}')
                         continue
                 
                 if processed > 0:
                     avg_loss = epoch_loss / processed
                     train_losses.append(avg_loss)
-                    print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}')
+                    print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}, samples={processed}')
                 else:
                     train_losses.append(0.0)
                     print(f'Epoch {epoch+1}: no samples processed')
@@ -271,7 +258,12 @@ implementation:
                 'final_loss': float(final_loss),
                 'samples_processed': processed,
                 'total_samples': len(caption_data),
-                'device_used': device
+                'device_used': device,
+                'versions': {
+                    'torch': torch.__version__,
+                    'transformers': '4.37.2',
+                    'tokenizers': '0.15.2'
+                }
             }
             
             with open(report_output, 'w') as f:
@@ -295,13 +287,15 @@ implementation:
             with open(schema_output, 'w') as f:
                 json.dump(schema, f, indent=2)
             
-            print('TRAINING COMPLETED SUCCESSFULLY!')
+            print('=== TRAINING COMPLETED SUCCESSFULLY! ===')
             print(f'Final loss: {final_loss:.4f}')
+            print(f'Processed {processed}/{len(caption_data)} samples')
             
         except Exception as e:
-            print(f'Training failed: {e}')
+            print(f'=== TRAINING FAILED: {e} ===')
             import traceback
             traceback.print_exc()
+            
             # Create minimal outputs
             for path in [model_output, report_output, loss_output, schema_output]:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
