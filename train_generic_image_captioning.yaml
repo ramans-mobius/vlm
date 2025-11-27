@@ -423,7 +423,7 @@ implementation:
                     print(f'  Created: {path}')
                 except Exception as create_error:
                     print(f'  Failed to create {path}: {create_error}')
-        " "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: vision_encoder_config}
