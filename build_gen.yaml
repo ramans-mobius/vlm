@@ -84,124 +84,124 @@ implementation:
 
         if architecture == 'git':
             model_code = '''
-import torch
-from transformers import GitForCausalLM, GitProcessor
-
-class GITImageCaptioningModel:
-    def __init__(self, config):
-        self.config = config
-        self.model = GitForCausalLM.from_pretrained(config['blueprint'].get('language_model', 'microsoft/git-base'))
-        self.processor = GitProcessor.from_pretrained(config['blueprint'].get('language_model', 'microsoft/git-base'))
+        import torch
+        from transformers import GitForCausalLM, GitProcessor
         
-    def to(self, device):
-        self.model = self.model.to(device)
-        return self
-        
-    def train(self):
-        self.model.train()
-        
-    def eval(self):
-        self.model.eval()
-        
-    def forward(self, images, input_ids=None, attention_mask=None, labels=None):
-        inputs = self.processor(images=images, text=None if input_ids is None else [''], return_tensors='pt', padding=True, truncation=True, max_length=self.config['max_caption_length'])
-        if input_ids is not None:
-            inputs['input_ids'] = input_ids
-            inputs['attention_mask'] = attention_mask
-        return self.model(**inputs, labels=labels)
-        
-    def generate(self, images, max_length=128, temperature=1.0):
-        self.eval()
-        inputs = self.processor(images=images, return_tensors='pt')
-        return self.model.generate(**inputs, max_length=max_length, temperature=temperature, do_sample=True)
-'''
+        class GITImageCaptioningModel:
+            def __init__(self, config):
+                self.config = config
+                self.model = GitForCausalLM.from_pretrained(config['blueprint'].get('language_model', 'microsoft/git-base'))
+                self.processor = GitProcessor.from_pretrained(config['blueprint'].get('language_model', 'microsoft/git-base'))
+                
+            def to(self, device):
+                self.model = self.model.to(device)
+                return self
+                
+            def train(self):
+                self.model.train()
+                
+            def eval(self):
+                self.model.eval()
+                
+            def forward(self, images, input_ids=None, attention_mask=None, labels=None):
+                inputs = self.processor(images=images, text=None if input_ids is None else [''], return_tensors='pt', padding=True, truncation=True, max_length=self.config['max_caption_length'])
+                if input_ids is not None:
+                    inputs['input_ids'] = input_ids
+                    inputs['attention_mask'] = attention_mask
+                return self.model(**inputs, labels=labels)
+                
+            def generate(self, images, max_length=128, temperature=1.0):
+                self.eval()
+                inputs = self.processor(images=images, return_tensors='pt')
+                return self.model.generate(**inputs, max_length=max_length, temperature=temperature, do_sample=True)
+        '''
         else:
             model_code = '''
-import torch
-import torch.nn as nn
-from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPModel, CLIPProcessor
-
-class CLIPLLMCaptioningModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        blueprint = config['blueprint']
-        components = blueprint.get('components', {})
+        import torch
+        import torch.nn as nn
+        from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPModel, CLIPProcessor
         
-        vision_cfg = components.get('vision_encoder', {})
-        self.clip_model = CLIPModel.from_pretrained(vision_cfg.get('model_name', 'openai/clip-vit-base-patch32'))
-        self.clip_processor = CLIPProcessor.from_pretrained(vision_cfg.get('model_name', 'openai/clip-vit-base-patch32'))
-        
-        text_cfg = components.get('text_decoder', {})
-        self.language_model = AutoModelForCausalLM.from_pretrained(text_cfg.get('model_name', 'gpt2'))
-        self.tokenizer = AutoTokenizer.from_pretrained(text_cfg.get('model_name', 'gpt2'))
-        
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        clip_dim = self.clip_model.config.projection_dim
-        text_dim = self.language_model.config.hidden_size
-        
-        if clip_dim != text_dim:
-            self.vision_proj = nn.Linear(clip_dim, text_dim)
-        else:
-            self.vision_proj = nn.Identity()
-        
-        if vision_cfg.get('unfreeze_layers', 0) == 0:
-            for param in self.clip_model.parameters():
-                param.requires_grad = False
-
-    def forward(self, images, input_ids=None, attention_mask=None, labels=None):
-        clip_inputs = self.clip_processor(images=images, return_tensors='pt')
-        device = next(self.language_model.parameters()).device
-        clip_inputs = {k: v.to(device) for k, v in clip_inputs.items()}
-        
-        with torch.no_grad():
-            clip_features = self.clip_model.get_image_features(**clip_inputs)
-        
-        visual_features = self.vision_proj(clip_features)
-        
-        if input_ids is not None:
-            text_embeddings = self.language_model.get_input_embeddings()(input_ids)
-            fused_embeddings = text_embeddings.clone()
-            fused_embeddings[:, 0:1, :] += visual_features.unsqueeze(1)
-            
-            outputs = self.language_model(inputs_embeds=fused_embeddings, attention_mask=attention_mask, labels=labels)
-            return outputs
-        else:
-            return visual_features
-
-    def generate(self, images, max_length=128, temperature=1.0):
-        self.eval()
-        with torch.no_grad():
-            clip_inputs = self.clip_processor(images=images, return_tensors='pt')
-            device = next(self.language_model.parameters()).device
-            clip_inputs = {k: v.to(device) for k, v in clip_inputs.items()}
-            clip_features = self.clip_model.get_image_features(**clip_inputs)
-            visual_features = self.vision_proj(clip_features)
-            
-            batch_size = visual_features.shape[0]
-            input_ids = torch.tensor([[self.tokenizer.bos_token_id]] * batch_size).to(device)
-            
-            for _ in range(max_length):
-                text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+        class CLIPLLMCaptioningModel(nn.Module):
+            def __init__(self, config):
+                super().__init__()
+                self.config = config
+                blueprint = config['blueprint']
+                components = blueprint.get('components', {})
                 
-                if input_ids.shape[1] == 1:
-                    fused_embeddings = text_embeddings + visual_features.unsqueeze(1)
+                vision_cfg = components.get('vision_encoder', {})
+                self.clip_model = CLIPModel.from_pretrained(vision_cfg.get('model_name', 'openai/clip-vit-base-patch32'))
+                self.clip_processor = CLIPProcessor.from_pretrained(vision_cfg.get('model_name', 'openai/clip-vit-base-patch32'))
+                
+                text_cfg = components.get('text_decoder', {})
+                self.language_model = AutoModelForCausalLM.from_pretrained(text_cfg.get('model_name', 'gpt2'))
+                self.tokenizer = AutoTokenizer.from_pretrained(text_cfg.get('model_name', 'gpt2'))
+                
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+                clip_dim = self.clip_model.config.projection_dim
+                text_dim = self.language_model.config.hidden_size
+                
+                if clip_dim != text_dim:
+                    self.vision_proj = nn.Linear(clip_dim, text_dim)
                 else:
-                    fused_embeddings = text_embeddings
+                    self.vision_proj = nn.Identity()
                 
-                outputs = self.language_model(inputs_embeds=fused_embeddings)
-                next_token_logits = outputs.logits[:, -1, :] / temperature
-                next_tokens = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                if vision_cfg.get('unfreeze_layers', 0) == 0:
+                    for param in self.clip_model.parameters():
+                        param.requires_grad = False
+        
+            def forward(self, images, input_ids=None, attention_mask=None, labels=None):
+                clip_inputs = self.clip_processor(images=images, return_tensors='pt')
+                device = next(self.language_model.parameters()).device
+                clip_inputs = {k: v.to(device) for k, v in clip_inputs.items()}
                 
-                input_ids = torch.cat([input_ids, next_tokens], dim=1)
+                with torch.no_grad():
+                    clip_features = self.clip_model.get_image_features(**clip_inputs)
                 
-                if (next_tokens == self.tokenizer.eos_token_id).all():
-                    break
-            
-            return input_ids
-'''
+                visual_features = self.vision_proj(clip_features)
+                
+                if input_ids is not None:
+                    text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+                    fused_embeddings = text_embeddings.clone()
+                    fused_embeddings[:, 0:1, :] += visual_features.unsqueeze(1)
+                    
+                    outputs = self.language_model(inputs_embeds=fused_embeddings, attention_mask=attention_mask, labels=labels)
+                    return outputs
+                else:
+                    return visual_features
+        
+            def generate(self, images, max_length=128, temperature=1.0):
+                self.eval()
+                with torch.no_grad():
+                    clip_inputs = self.clip_processor(images=images, return_tensors='pt')
+                    device = next(self.language_model.parameters()).device
+                    clip_inputs = {k: v.to(device) for k, v in clip_inputs.items()}
+                    clip_features = self.clip_model.get_image_features(**clip_inputs)
+                    visual_features = self.vision_proj(clip_features)
+                    
+                    batch_size = visual_features.shape[0]
+                    input_ids = torch.tensor([[self.tokenizer.bos_token_id]] * batch_size).to(device)
+                    
+                    for _ in range(max_length):
+                        text_embeddings = self.language_model.get_input_embeddings()(input_ids)
+                        
+                        if input_ids.shape[1] == 1:
+                            fused_embeddings = text_embeddings + visual_features.unsqueeze(1)
+                        else:
+                            fused_embeddings = text_embeddings
+                        
+                        outputs = self.language_model(inputs_embeds=fused_embeddings)
+                        next_token_logits = outputs.logits[:, -1, :] / temperature
+                        next_tokens = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                        
+                        input_ids = torch.cat([input_ids, next_tokens], dim=1)
+                        
+                        if (next_tokens == self.tokenizer.eos_token_id).all():
+                            break
+                    
+                    return input_ids
+        '''
 
         # Create output directories and save files
         os.makedirs(os.path.dirname(model_config_path), exist_ok=True)
