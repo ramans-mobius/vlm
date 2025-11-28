@@ -25,7 +25,8 @@ implementation:
       - sh
       - -c
       - |
-        python3 -c "
+        set -e
+        python3 << 'EOF'
         import sys, os, json, torch
         
         print('Building image captioning model')
@@ -40,7 +41,7 @@ implementation:
 
         # Parse model blueprint with robust handling
         blueprint = {}
-        print(f'RAW model_blueprint_input received: \"{model_blueprint_input}\"')
+        print(f'RAW model_blueprint_input received: "{model_blueprint_input}"')
         print(f'Input type: {type(model_blueprint_input)}')
         print(f'Input length: {len(model_blueprint_input)}')
 
@@ -53,8 +54,8 @@ implementation:
                 except json.JSONDecodeError as e1:
                     print(f'Direct blueprint parse failed: {e1}')
                     # Try cleaning escaped quotes
-                    cleaned_blueprint = model_blueprint_input.replace('\\\"', '\"').replace('\\\\', '\\')
-                    print(f'After cleaning: \"{cleaned_blueprint}\"')
+                    cleaned_blueprint = model_blueprint_input.replace('\\"', '"').replace('\\\\', '\\')
+                    print(f'After cleaning: "{cleaned_blueprint}"')
                     try:
                         blueprint = json.loads(cleaned_blueprint)
                         print('✓ Cleaned blueprint JSON parse successful')
@@ -83,8 +84,7 @@ implementation:
         }
 
         if architecture == 'git':
-            model_code = '''
-        import torch
+            model_code = '''import torch
         from transformers import GitForCausalLM, GitProcessor
         
         class GITImageCaptioningModel:
@@ -116,8 +116,7 @@ implementation:
                 return self.model.generate(**inputs, max_length=max_length, temperature=temperature, do_sample=True)
         '''
         else:
-            model_code = '''
-        import torch
+            model_code = '''import torch
         import torch.nn as nn
         from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPModel, CLIPProcessor
         
@@ -234,7 +233,8 @@ implementation:
             json.dump(schema, f, indent=2)
 
         print('Model built successfully')
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+        EOF
+        python3 -c "import sys; print('Python script completed successfully')"
     args:
       - {inputPath: tokenizer_json}
       - {inputValue: model_blueprint}
