@@ -1,4 +1,4 @@
-name: 2 Gen Train Image Captioning Model
+name: Gen Train Image Captioning Model
 description: Universal training for any image captioning architecture
 inputs:
   - name: tokenizer_json
@@ -68,8 +68,13 @@ implementation:
                     print('✓ Direct JSON parse successful')
                 except json.JSONDecodeError as e1:
                     print(f'Direct parse failed: {e1}')
-                    # Try cleaning escaped quotes - FIXED THE SYNTAX ERROR HERE
-                    cleaned_input = training_params_input.replace('\\"', '"').replace('\\\\', '\\')
+                    # Try cleaning escaped quotes - SIMPLIFIED APPROACH
+                    cleaned_input = training_params_input
+                    # Remove backslash escapes
+                    if '\\"' in cleaned_input:
+                        cleaned_input = cleaned_input.replace('\\"', '"')
+                    if '\\\\' in cleaned_input:
+                        cleaned_input = cleaned_input.replace('\\\\', '\\')
                     print(f'After cleaning: "{cleaned_input}"')
                     try:
                         training_params = json.loads(cleaned_input)
