@@ -46,23 +46,54 @@ implementation:
         loss_output = sys.argv[9]
         schema_output = sys.argv[10]
 
+        # Load model config
         with open(model_config_input, 'r') as f:
             model_config = json.load(f)
         
         architecture = model_config.get('architecture', 'git')
         print(f'Training {architecture} model')
 
+        # Parse training parameters with robust handling
         training_params = {}
+        print(f'RAW training_params_input received: \"{training_params_input}\"')
+        print(f'Input type: {type(training_params_input)}')
+        print(f'Input length: {len(training_params_input)}')
+
         try:
             if training_params_input.strip() and training_params_input.strip() != '{}':
-                training_params = json.loads(training_params_input)
+                # Try direct parse first
+                try:
+                    training_params = json.loads(training_params_input)
+                    print('✓ Direct JSON parse successful')
+                except json.JSONDecodeError as e1:
+                    print(f'Direct parse failed: {e1}')
+                    # Try cleaning escaped quotes
+                    cleaned_input = training_params_input.replace('\\\"', '\"').replace('\\\\', '\\')
+                    print(f'After cleaning: \"{cleaned_input}\"')
+                    try:
+                        training_params = json.loads(cleaned_input)
+                        print('✓ Cleaned JSON parse successful')
+                    except json.JSONDecodeError as e2:
+                        print(f'Cleaned parse also failed: {e2}')
+                        # Fallback to manual parsing for common patterns
+                        training_params = {
+                            'epochs': 3,
+                            'learning_rate': 5e-5,
+                            'batch_size': 1
+                        }
+                        print('⚠ Using default training parameters')
+            
+            print(f'Final training_params: {training_params}')
+            
         except Exception as e:
-            print(f'Training params parse failed: {e}')
+            print(f'Unexpected error in param parsing: {e}')
+            training_params = {'epochs': 3, 'learning_rate': 5e-5, 'batch_size': 1}
 
         epochs = training_params.get('epochs', 1)
         learning_rate = training_params.get('learning_rate', 5e-5)
         batch_size = training_params.get('batch_size', 1)
 
+        # Load dataset
         caption_data = []
         try:
             if os.path.exists(dataset_input):
@@ -77,31 +108,46 @@ implementation:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f'Using device: {device}')
 
+        # Load model dynamically with robust approach
         print('Loading model dynamically')
-        spec = importlib.util.spec_from_file_location('model_module', model_py_input)
-        model_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(model_module)
-        
-        if hasattr(model_module, 'UniversalImageCaptioningModel'):
-            ModelClass = getattr(model_module, 'UniversalImageCaptioningModel')
-            model = ModelClass(model_config)
-        elif hasattr(model_module, 'GITImageCaptioningModel'):
-            ModelClass = getattr(model_module, 'GITImageCaptioningModel')
-            model_wrapper = ModelClass(model_config)
-            model = model_wrapper.model
-            processor = model_wrapper.processor
-        elif hasattr(model_module, 'CLIPLLMCaptioningModel'):
-            ModelClass = getattr(model_module, 'CLIPLLMCaptioningModel')
-            model = ModelClass(model_config)
-            processor = None
-        else:
-            raise ValueError('No supported model class found in model.py')
-        
-        model = model.to(device)
-        model.train()
+        try:
+            # Read the model code and execute it
+            with open(model_py_input, 'r') as f:
+                model_code = f.read()
+            
+            # Create a module dictionary
+            model_globals = {}
+            exec(model_code, model_globals)
+            
+            # Find the model class
+            ModelClass = None
+            for class_name in ['GITImageCaptioningModel', 'CLIPLLMCaptioningModel', 'UniversalImageCaptioningModel']:
+                if class_name in model_globals:
+                    ModelClass = model_globals[class_name]
+                    print(f'Found model class: {class_name}')
+                    break
+            
+            if ModelClass is None:
+                raise ValueError('No supported model class found in model.py')
+            
+            # Instantiate the model
+            if 'GITImageCaptioningModel' in str(ModelClass):
+                model_wrapper = ModelClass(model_config)
+                model = model_wrapper.model
+                processor = model_wrapper.processor
+            else:
+                model = ModelClass(model_config)
+                processor = None
+                
+        except Exception as e:
+            print(f'Model loading failed: {e}')
+            import traceback
+            traceback.print_exc()
+            exit(1)
 
         print('Starting training')
         
+        # Create output directories
         for path in [model_output, report_output, loss_output, schema_output]:
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -184,6 +230,7 @@ implementation:
             
             final_loss = train_losses[-1] if train_losses else 0.0
             
+            # Save model
             if architecture == 'git' and hasattr(model, 'save_pretrained'):
                 model.save_pretrained(os.path.dirname(model_output))
                 if hasattr(processor, 'save_pretrained'):
