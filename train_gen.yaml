@@ -58,13 +58,16 @@ implementation:
         architecture = model_config.get('architecture', 'git')
         print(f'Training {architecture} model')
 
-        # Parse training parameters - SIMPLE DIRECT APPROACH
+        # Parse training parameters - HANDLE ESCAPED QUOTES
         training_params = {}
         print(f'RAW training_params_input received: "{training_params_input}"')
 
         try:
             if training_params_input.strip() and training_params_input.strip() != '{}':
-                training_params = json.loads(training_params_input)
+                # Clean escaped quotes before parsing
+                cleaned_input = training_params_input.replace('\\"', '"')
+                print(f'After cleaning escaped quotes: "{cleaned_input}"')
+                training_params = json.loads(cleaned_input)
                 print('✓ Training params JSON parse successful')
             else:
                 training_params = {'epochs': 3, 'learning_rate': 5e-5, 'batch_size': 1}
