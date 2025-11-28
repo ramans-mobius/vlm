@@ -1,4 +1,4 @@
-name: 2 Gen Build Image Captioning Model
+name: Gen Build Image Captioning Model
 description: Builds image captioning models from JSON blueprint
 inputs:
   - name: tokenizer_json
@@ -53,8 +53,13 @@ implementation:
                     print('✓ Direct blueprint JSON parse successful')
                 except json.JSONDecodeError as e1:
                     print(f'Direct blueprint parse failed: {e1}')
-                    # Try cleaning escaped quotes - FIXED THE SYNTAX ERROR HERE
-                    cleaned_blueprint = model_blueprint_input.replace('\\"', '"').replace('\\\\', '\\')
+                    # Try cleaning escaped quotes - SIMPLIFIED APPROACH
+                    cleaned_blueprint = model_blueprint_input
+                    # Remove backslash escapes
+                    if '\\"' in cleaned_blueprint:
+                        cleaned_blueprint = cleaned_blueprint.replace('\\"', '"')
+                    if '\\\\' in cleaned_blueprint:
+                        cleaned_blueprint = cleaned_blueprint.replace('\\\\', '\\')
                     print(f'After cleaning: "{cleaned_blueprint}"')
                     try:
                         blueprint = json.loads(cleaned_blueprint)
