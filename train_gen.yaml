@@ -1,4 +1,4 @@
-name: Gen Train Image Captioning Model
+name: 2 Gen Train Image Captioning Model
 description: Universal training for any image captioning architecture
 inputs:
   - name: tokenizer_json
@@ -30,7 +30,8 @@ implementation:
       - sh
       - -c
       - |
-        python3 -c "
+        set -e
+        python3 << 'EOF'
         import sys, os, json, pickle, base64, io, importlib.util
         
         print('Starting universal image captioning training')
@@ -55,7 +56,7 @@ implementation:
 
         # Parse training parameters with robust handling
         training_params = {}
-        print(f'RAW training_params_input received: \"{training_params_input}\"')
+        print(f'RAW training_params_input received: "{training_params_input}"')
         print(f'Input type: {type(training_params_input)}')
         print(f'Input length: {len(training_params_input)}')
 
@@ -67,9 +68,9 @@ implementation:
                     print('✓ Direct JSON parse successful')
                 except json.JSONDecodeError as e1:
                     print(f'Direct parse failed: {e1}')
-                    # Try cleaning escaped quotes
-                    cleaned_input = training_params_input.replace('\\\"', '\"').replace('\\\\', '\\')
-                    print(f'After cleaning: \"{cleaned_input}\"')
+                    # Try cleaning escaped quotes - FIXED THE SYNTAX ERROR HERE
+                    cleaned_input = training_params_input.replace('\\"', '"').replace('\\\\', '\\')
+                    print(f'After cleaning: "{cleaned_input}"')
                     try:
                         training_params = json.loads(cleaned_input)
                         print('✓ Cleaned JSON parse successful')
@@ -302,7 +303,7 @@ implementation:
                         json.dump({'status': 'error', 'error': str(e), 'architecture': architecture}, f)
                 else:
                     torch.save({'status': 'error', 'error': str(e), 'architecture': architecture}, path)
-        " "$0" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+        EOF
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: model_config}
