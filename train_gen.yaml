@@ -30,12 +30,16 @@ implementation:
       - sh
       - -c
       - |
-        set -e
-        python3 << 'EOF'
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
         import sys, os, json, pickle, base64, io, importlib.util
         
         print('Starting universal image captioning training')
         
+        # Parse arguments
         tokenizer_input = sys.argv[1]
         model_config_input = sys.argv[2]
         model_weights_input = sys.argv[3]
@@ -54,46 +58,23 @@ implementation:
         architecture = model_config.get('architecture', 'git')
         print(f'Training {architecture} model')
 
-        # Parse training parameters with robust handling
+        # Parse training parameters - SIMPLE DIRECT APPROACH
         training_params = {}
         print(f'RAW training_params_input received: "{training_params_input}"')
-        print(f'Input type: {type(training_params_input)}')
-        print(f'Input length: {len(training_params_input)}')
 
         try:
             if training_params_input.strip() and training_params_input.strip() != '{}':
-                # Try direct parse first
-                try:
-                    training_params = json.loads(training_params_input)
-                    print('✓ Direct JSON parse successful')
-                except json.JSONDecodeError as e1:
-                    print(f'Direct parse failed: {e1}')
-                    # Try cleaning escaped quotes - SIMPLIFIED APPROACH
-                    cleaned_input = training_params_input
-                    # Remove backslash escapes
-                    if '\\"' in cleaned_input:
-                        cleaned_input = cleaned_input.replace('\\"', '"')
-                    if '\\\\' in cleaned_input:
-                        cleaned_input = cleaned_input.replace('\\\\', '\\')
-                    print(f'After cleaning: "{cleaned_input}"')
-                    try:
-                        training_params = json.loads(cleaned_input)
-                        print('✓ Cleaned JSON parse successful')
-                    except json.JSONDecodeError as e2:
-                        print(f'Cleaned parse also failed: {e2}')
-                        # Fallback to manual parsing for common patterns
-                        training_params = {
-                            'epochs': 3,
-                            'learning_rate': 5e-5,
-                            'batch_size': 1
-                        }
-                        print('⚠ Using default training parameters')
-            
-            print(f'Final training_params: {training_params}')
-            
+                training_params = json.loads(training_params_input)
+                print('✓ Training params JSON parse successful')
+            else:
+                training_params = {'epochs': 3, 'learning_rate': 5e-5, 'batch_size': 1}
+                print('⚠ Using default training parameters')
         except Exception as e:
-            print(f'Unexpected error in param parsing: {e}')
+            print(f'Training params parse failed: {e}')
             training_params = {'epochs': 3, 'learning_rate': 5e-5, 'batch_size': 1}
+            print('⚠ Using default training parameters due to parse error')
+
+        print(f'Final training_params: {training_params}')
 
         epochs = training_params.get('epochs', 1)
         learning_rate = training_params.get('learning_rate', 5e-5)
@@ -308,7 +289,6 @@ implementation:
                         json.dump({'status': 'error', 'error': str(e), 'architecture': architecture}, f)
                 else:
                     torch.save({'status': 'error', 'error': str(e), 'architecture': architecture}, path)
-        EOF
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: model_config}
