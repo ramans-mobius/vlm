@@ -1,5 +1,5 @@
-name: Train GIT Image Captioning
-description: Training with pure GIT model - SIMPLIFIED
+name: 2 Train GIT Image Captioning
+description: Training with GIT model directly
 inputs:
   - name: tokenizer_json
     type: Model
@@ -19,36 +19,48 @@ outputs:
     type: Data
 implementation:
   container:
-    image: gurpreetgandhi/nesy-factory:v29
+    image: pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
     command:
       - sh
       - -c
       - |
+        #!/bin/bash
+        
+        echo "=== SETUP CLEAN ENVIRONMENT ==="
+        
+        # Clean pip cache
+        pip cache purge
+        
+        # Install ONLY what we need
+        pip install --no-cache-dir --upgrade pip
+        
+        # Install specific compatible versions
+        pip install --no-cache-dir \
+          torch==2.1.0 \
+          torchvision==0.16.0 \
+          transformers==4.37.2 \
+          tokenizers==0.15.2 \
+          datasets==2.15.0 \
+          Pillow==10.1.0 \
+          accelerate==0.25.0 \
+          protobuf==3.20.3 \
+          numpy==1.24.3
+        
+        echo "=== START TRAINING ==="
+        
         python3 -c "
-        import sys, os, json, pickle, base64, io
-        import subprocess
-        
-        print('=== SETTING UP EXACT VERSION MATCH ===')
-        
-        # Install EXACT versions from your local environment
-        print('Installing exact versions from your local environment...')
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'torch==2.1.0+cpu', '-f', 'https://download.pytorch.org/whl/torch_stable.html', '-q'])
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'torchvision==0.16.0+cpu', '-f', 'https://download.pytorch.org/whl/torch_stable.html', '-q'])
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'transformers==4.37.2', '-q'])
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'tokenizers==0.15.2', '-q'])
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'datasets==4.1.1', '-q'])
-        subprocess.call([sys.executable, '-m', 'pip', 'install', 'pillow==11.3.0', '-q'])
-        
-        print('Version matching completed')
-        
-        # Now proceed with training
+        import sys
+        import os
+        import json
+        import pickle
+        import base64
+        import io
+        import traceback
         import torch
         from PIL import Image
+        import numpy as np
         
-        print('=== VERSION VERIFICATION ===')
-        print(f'torch: {torch.__version__}')
-        
-        # Get arguments - SIMPLIFIED (no vision_encoder_config)
+        # Get arguments
         tokenizer_input = sys.argv[1]
         dataset_input = sys.argv[2]
         training_params_input = sys.argv[3]
@@ -57,84 +69,80 @@ implementation:
         loss_output = sys.argv[6]
         schema_output = sys.argv[7]
         
-        print('=== INPUT VERIFICATION ===')
-        print(f'tokenizer_input exists: {os.path.exists(tokenizer_input)}')
-        print(f'dataset_input exists: {os.path.exists(dataset_input)}')
-        
-        # Parse training parameters
-        training_params = {}
-        try:
-            if training_params_input.strip() and training_params_input.strip() != '{}':
-                training_params = json.loads(training_params_input)
-        except:
-            pass
-            
-        epochs = training_params.get('epochs', 1)
-        learning_rate = training_params.get('learning_rate', 5e-5)
-        
-        print(f'Training: {epochs} epochs, lr={learning_rate}')
-        
-        # Load dataset
-        caption_data = []
-        try:
-            if os.path.exists(dataset_input):
-                with open(dataset_input, 'rb') as f:
-                    caption_data = pickle.load(f)
-                print(f'Loaded {len(caption_data)} samples')
-        except Exception as e:
-            print(f'Dataset load failed: {e}')
-        
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print(f'Device: {device}')
-        
-        print('=== LOADING GIT MODEL ===')
-        
-        try:
-            from transformers import GitForCausalLM, GitProcessor
-            
-            print('Loading GIT processor and model...')
-            git_processor = GitProcessor.from_pretrained('microsoft/git-base')
-            git_model = GitForCausalLM.from_pretrained('microsoft/git-base')
-            
-            git_model = git_model.to(device)
-            print('GIT model loaded successfully!')
-            
-        except Exception as e:
-            print(f'GIT model loading failed: {e}')
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
-        
-        print('=== STARTING TRAINING ===')
+        print('=== TRAINING STARTED ===')
+        print(f'Device: cuda available: {torch.cuda.is_available()}')
         
         # Create output directories
         for path in [model_output, report_output, loss_output, schema_output]:
             os.makedirs(os.path.dirname(path), exist_ok=True)
         
         try:
+            # Parse training parameters
+            training_params = {}
+            if training_params_input.strip() and training_params_input.strip() != '{}':
+                training_params = json.loads(training_params_input)
+            
+            epochs = training_params.get('epochs', 1)
+            learning_rate = training_params.get('learning_rate', 5e-5)
+            batch_size = training_params.get('batch_size', 4)
+            
+            print(f'Training config: {epochs} epochs, lr={learning_rate}, batch={batch_size}')
+            
+            # Load dataset
+            caption_data = []
+            if os.path.exists(dataset_input):
+                with open(dataset_input, 'rb') as f:
+                    caption_data = pickle.load(f)
+                print(f'Loaded {len(caption_data)} samples')
+            
+            # Check for CUDA
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print(f'Using device: {device}')
+            
+            # Import transformers AFTER torch is properly installed
+            from transformers import GitForCausalLM, GitProcessor
+            
+            print('Loading GIT model from transformers...')
+            
+            # Load model and processor
+            git_processor = GitProcessor.from_pretrained('microsoft/git-base')
+            git_model = GitForCausalLM.from_pretrained('microsoft/git-base')
+            git_model = git_model.to(device)
+            git_model.train()
+            
+            print('Model loaded successfully!')
+            
+            # Setup optimizer
             optimizer = torch.optim.AdamW(git_model.parameters(), lr=learning_rate)
+            
+            # Training loop
             train_losses = []
+            successful_samples = 0
             
             for epoch in range(epochs):
+                print(f'\\n=== Epoch {epoch+1}/{epochs} ===')
                 epoch_loss = 0.0
-                successful_samples = 0
                 processed = 0
                 
                 for i, sample in enumerate(caption_data):
                     try:
+                        if processed >= len(caption_data):
+                            break
+                            
                         optimizer.zero_grad()
                         
-                        # Process image and text using GIT processor
+                        # Process image
                         image_bytes = base64.b64decode(sample['image_data'])
                         image = Image.open(io.BytesIO(image_bytes))
                         if image.mode != 'RGB':
                             image = image.convert('RGB')
                         
+                        # Get caption
                         caption = sample.get('caption', '')
                         if not caption:
                             continue
                         
-                        # SIMPLIFIED: GIT processor handles everything
+                        # Process with GIT processor
                         inputs = git_processor(
                             images=image,
                             text=caption,
@@ -147,12 +155,12 @@ implementation:
                         # Move to device
                         inputs = {k: v.to(device) for k, v in inputs.items()}
                         
-                        # SIMPLIFIED: Standard GIT forward pass
+                        # Forward pass with labels
                         outputs = git_model(
                             pixel_values=inputs.get('pixel_values'),
                             input_ids=inputs.get('input_ids'),
                             attention_mask=inputs.get('attention_mask'),
-                            labels=inputs.get('input_ids')
+                            labels=inputs.get('input_ids')  # Use input_ids as labels for autoregressive loss
                         )
                         
                         loss = outputs.loss
@@ -160,15 +168,18 @@ implementation:
                         if not torch.isnan(loss) and not torch.isinf(loss):
                             loss.backward()
                             optimizer.step()
+                            
                             epoch_loss += loss.item()
                             successful_samples += 1
                             
-                            if successful_samples % 20 == 0:
-                                print(f'Epoch {epoch+1}, sample {successful_samples}, loss: {loss.item():.4f}')
-                                
+                            if successful_samples % 10 == 0:
+                                print(f'  Sample {successful_samples}, loss: {loss.item():.4f}')
+                        else:
+                            print(f'  Sample {i}: Invalid loss value')
+                            
                     except Exception as e:
-                        if processed < 3:
-                            print(f'Sample {i} failed: {e}')
+                        if i < 3:  # Only show first few errors
+                            print(f'  Sample {i} error: {str(e)[:100]}')
                         continue
                     finally:
                         processed += 1
@@ -176,43 +187,46 @@ implementation:
                 if successful_samples > 0:
                     avg_loss = epoch_loss / successful_samples
                     train_losses.append(avg_loss)
-                    print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}, successful={successful_samples}/{processed}')
+                    print(f'Epoch {epoch+1} completed: avg_loss={avg_loss:.4f}, processed={processed}')
                 else:
                     train_losses.append(0.0)
-                    print(f'Epoch {epoch+1}: no successful samples')
+                    print(f'Epoch {epoch+1}: No successful samples')
             
-            final_loss = train_losses[-1] if train_losses else 0.0
+            print('\\n=== Saving model ===')
             
-            # Save the trained GIT model
-            git_model.save_pretrained(os.path.dirname(model_output))
-            git_processor.save_pretrained(os.path.dirname(model_output))
+            # Save model and processor
+            save_dir = os.path.dirname(model_output)
+            git_model.save_pretrained(save_dir)
+            git_processor.save_pretrained(save_dir)
             
-            # Save training info
-            training_info = {
-                'model_type': 'git_base',
-                'training_params': training_params,
-                'final_loss': float(final_loss),
-                'epochs_trained': len(train_losses),
-                'successful_samples': successful_samples,
-                'total_samples': len(caption_data)
+            # Save checkpoint file
+            checkpoint = {
+                'model_state_dict': git_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'epoch': epochs,
+                'loss': train_losses[-1] if train_losses else 0.0
             }
+            torch.save(checkpoint, model_output)
             
-            torch.save(training_info, model_output)
+            print('=== Creating reports ===')
             
-            # Create reports
+            # Training report
             report = {
                 'status': 'success',
                 'model': 'microsoft/git-base',
-                'epochs_completed': len(train_losses),
-                'final_loss': float(final_loss),
+                'epochs_completed': epochs,
+                'final_loss': float(train_losses[-1]) if train_losses else 0.0,
+                'train_losses': [float(loss) for loss in train_losses],
                 'successful_samples': successful_samples,
                 'total_samples': len(caption_data),
-                'device': device
+                'device': str(device),
+                'training_params': training_params
             }
             
             with open(report_output, 'w') as f:
                 json.dump(report, f, indent=2)
             
+            # Loss curves data
             loss_data = {
                 'epochs': list(range(1, len(train_losses) + 1)),
                 'train_loss': [float(loss) for loss in train_losses]
@@ -221,10 +235,12 @@ implementation:
             with open(loss_output, 'w') as f:
                 json.dump(loss_data, f, indent=2)
             
+            # Schema
             schema = {
                 'training_completed': True,
                 'model_type': 'git_image_captioning',
-                'final_loss': float(final_loss),
+                'final_loss': float(train_losses[-1]) if train_losses else 0.0,
+                'epochs': epochs,
                 'successful_samples': successful_samples
             }
             
@@ -232,23 +248,40 @@ implementation:
                 json.dump(schema, f, indent=2)
             
             print('=== TRAINING COMPLETED SUCCESSFULLY! ===')
-            print(f'Final loss: {final_loss:.4f}')
+            print(f'Final loss: {train_losses[-1] if train_losses else 0.0:.4f}')
             print(f'Successful samples: {successful_samples}/{len(caption_data)}')
             
         except Exception as e:
-            print(f'=== TRAINING FAILED: {e} ===')
-            import traceback
+            print(f'\\n=== ERROR: {str(e)} ===')
             traceback.print_exc()
             
             # Create error outputs
-            for path in [model_output, report_output, loss_output, schema_output]:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                if path.endswith('.json'):
-                    with open(path, 'w') as f:
-                        json.dump({'status': 'error', 'error': str(e)}, f)
-                else:
-                    torch.save({'status': 'error', 'error': str(e)}, path)
+            error_data = {
+                'status': 'error',
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }
+            
+            # Save error reports
+            for path, content in [
+                (model_output, {'status': 'error', 'error': str(e)}),
+                (report_output, error_data),
+                (loss_output, {'status': 'error', 'error': str(e)}),
+                (schema_output, {'status': 'error', 'error': str(e)})
+            ]:
+                try:
+                    if path.endswith('.pt'):
+                        torch.save(content, path)
+                    else:
+                        with open(path, 'w') as f:
+                            json.dump(content, f, indent=2)
+                except:
+                    pass
+            
+            sys.exit(1)
         " "$0" "$1" "$2" "$3" "$4" "$5" "$6"
+        
+        echo "=== PROCESS COMPLETED ==="
     args:
       - {inputPath: tokenizer_json}
       - {inputPath: caption_dataset}
